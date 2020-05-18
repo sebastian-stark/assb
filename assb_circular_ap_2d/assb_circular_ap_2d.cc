@@ -731,9 +731,9 @@ int main()
 	DirichletConstraint<spacedim> dc_u_y_top(u, 1, InterfaceSide::minus, {6, 7}, nullptr, &constant_displacement);
 
 	Constraints<spacedim> constraints;
-	constraints.add_dirichletConstraint(dc_u_x);
-	constraints.add_dirichletConstraint(dc_u_y_bottom);
-	constraints.add_dirichletConstraint(dc_u_y_top);
+	constraints.add_dirichlet_constraint(dc_u_x);
+	constraints.add_dirichlet_constraint(dc_u_y_bottom);
+	constraints.add_dirichlet_constraint(dc_u_y_top);
 
 /***************************************************
  * set up finite element model and do computations *
