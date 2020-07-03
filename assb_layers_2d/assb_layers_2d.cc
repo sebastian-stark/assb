@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_dgq.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/base/conditional_ostream.h>
 
@@ -18,18 +19,12 @@ using namespace dealii::GalerkinTools;
 using namespace incrementalFE;
 
 /**
- * postprocessor computing the Cauchy stress from the displacement field
+ * postprocessor computing the pressure from the displacement field
  */
 template <int spacedim>
-class StressPostprocessor : public DataPostprocessor<spacedim>
+class PressurePostprocessor : public DataPostprocessorScalar<spacedim>
 {
 private:
-
-	/**
-	 * Name of stress tensor
-	 */
-	const string
-	name;
 
 	/**
 	 * Index of first component of displacement field
@@ -38,10 +33,10 @@ private:
 	global_component_index_u;
 
 	/**
-	 * Index of concentration field
+	 * Indices of concentration fields
 	 */
-	const unsigned int
-	global_component_index_c;
+	const vector<unsigned int>
+	global_component_indices_c;
 
 	/**
 	 * Material id for which this produces non-zero graphical output
@@ -74,18 +69,18 @@ private:
 	c_ref;
 
 public:
-	StressPostprocessor(const string&		name,
-						const unsigned int	global_component_index_u,
-						const unsigned int	global_component_index_c,
-						const unsigned int	material_id,
-						const double		lambda,
-						const double		mu,
-						const double		deps,
-						const double		c_ref)
+	PressurePostprocessor(const string&				name,
+						const unsigned int			global_component_index_u,
+						const vector<unsigned int>	global_component_indices_c,
+						const unsigned int			material_id,
+						const double				lambda,
+						const double				mu,
+						const double				deps,
+						const double				c_ref)
 	:
-	name(name),
+	DataPostprocessorScalar<spacedim>(name, update_values | update_gradients),
 	global_component_index_u(global_component_index_u),
-	global_component_index_c(global_component_index_c),
+	global_component_indices_c(global_component_indices_c),
 	material_id(material_id),
 	lambda(lambda),
 	mu(mu),
@@ -94,7 +89,6 @@ public:
 	{
 	}
 
-	virtual
 	void
 	evaluate_vector_field(	const DataPostprocessorInputs::Vector<spacedim>&	input_data,
 							vector<Vector<double>>&								computed_quantities)
@@ -117,58 +111,54 @@ public:
 				for (unsigned int d = 0; d < 3; ++d)
 					F[d][d] += 1.0;
 
-				const double c = input_data.solution_values[dataset][global_component_index_c];
-				const double J = determinant(F);
+				double c = 0.0;
+				for(const auto& global_component_index_c : global_component_indices_c)
+					c += input_data.solution_values[dataset][global_component_index_c];
 				E = 0.5 * (contract<0, 0>(F, F) - I) - deps/3.0 * (c/c_ref - 1.0) * I;
 				T = lambda * trace(E) * I + 2.0 * mu * E;
-				sigma = symmetrize(1.0 / J * contract<1,1>(contract<1,0>(F, T), F));
-				for (unsigned int d = 0; d < 3; ++d)
-					for (unsigned int e = 0; e < 3; ++e)
-						computed_quantities[dataset][3 * d + e] = sigma[d][e];
-				computed_quantities[dataset][9] = eigenvalues(sigma)[0];
+				sigma = symmetrize(T);
+				computed_quantities[dataset][0] = -trace(sigma)/3.0;
 			}
 			else
 			{
-				for (unsigned int d = 0; d < 3; ++d)
-					for (unsigned int e = 0; e < 3; ++e)
-						computed_quantities[dataset][3 * d + e] = 0.0;
-				computed_quantities[dataset][9] = 0.0;
+				computed_quantities[dataset][0] = 0.0;
 			}
 		}
 	}
-
-	virtual vector<string>
-	get_names()
-	const override
-	{
-		static const char suffixes[] = {'x', 'y', 'z'};
-		vector<std::string> names;
-		for(unsigned int d = 0; d < 3; ++d)
-			for(unsigned int e = 0; e < 3; ++e)
-				names.push_back(name + '_' + suffixes[d] + suffixes[e]);
-		names.push_back(name + "_max");
-		return names;
-	}
-
-	virtual vector<DataComponentInterpretation::DataComponentInterpretation>
-	get_data_component_interpretation()
-	const override
-	{
-		return vector<DataComponentInterpretation::DataComponentInterpretation>(10, DataComponentInterpretation::component_is_scalar);
-	}
-
-	virtual UpdateFlags
-	get_needed_update_flags()
-	const override
-	{
-		return update_values | update_gradients;
-	}
-
-	virtual
-	~StressPostprocessor()
-	{
-	}
  };
+
+template <int spacedim>
+class GradUPostprocessor : public DataPostprocessorTensor<spacedim>
+{
+
+	/**
+	 * Index of first component of displacement field
+	 */
+	const unsigned int
+	global_component_index_u;
+
+
+public:
+	GradUPostprocessor(const unsigned int global_component_index_u)
+	:
+	DataPostprocessorTensor<spacedim> ("grad_u", update_gradients),
+	global_component_index_u(global_component_index_u)
+	{
+	}
+
+	void
+	evaluate_vector_field(	const DataPostprocessorInputs::Vector<spacedim>&	input_data,
+							vector<Vector<double>>&								computed_quantities)
+	const
+	{
+		for (unsigned int p = 0; p < input_data.solution_gradients.size(); ++p)
+		{
+			for(unsigned int d = 0; d < spacedim; ++d)
+				for (unsigned int e = 0; e < spacedim; ++e)
+					computed_quantities[p][Tensor<2,spacedim>::component_to_unrolled_index(TableIndices<2>(d,e))] = input_data.solution_gradients[p][d + global_component_index_u][e];
+      }
+  }
+};
 
 
 // class defining an initial constant value for a scalar independent field
@@ -325,6 +315,8 @@ int main()
 
 	const unsigned int spacedim = 2;	// this currently doesn't work for anything else than spacedim == 2
 
+	const bool binary_se = true;		// if true, use relations for binary solid electrolyte
+
 /**************
  * parameters *
  **************/
@@ -345,18 +337,24 @@ int main()
 	const double dt_1 = 2700.0 * D_ast / (L_ast * L_ast);
 
 	const double T = 293.15 / T_ast;
-	const double c_ap_ref = 47500.0 / c_ast;
+	const double c_Li_ref = 47500.0 / c_ast;
+	const double c_Lip_ref = binary_se ? 750.0 / c_ast : 10000.0 / c_ast;
+	const double c_LiX_ref = 750.0 / c_ast;
 
-	const double lambda_se = 57.7e9 / (R_ast * T_ast * c_ast);
-	const double mu_se = 38.5e9 / (R_ast * T_ast * c_ast);
+	const double lambda_se = binary_se ? 5e6 / (R_ast * T_ast * c_ast) : 57.7e9 / (R_ast * T_ast * c_ast);
+	const double mu_se = binary_se ? 5e6 / (R_ast * T_ast * c_ast) : 38.5e9 / (R_ast * T_ast * c_ast);
+	cout << lambda_se << endl;
+	cout << mu_se << endl;
+	return 0;
 	const double lambda_ap = 50.6e9 / (R_ast * T_ast * c_ast);
 	const double mu_ap = 80e9 / (R_ast * T_ast * c_ast);
-	const double deps_ap = -0.04;
+	const double deps_Li = -0.04;
+	const double deps_LiX = 0.2;
 	const double c_ap_V = 50000.0 / c_ast;
 	const double dmu_ap = 70000.0 / (R_ast * T_ast);
-	const double D_se = 2.6e-12 / D_ast;
-	const double D_ap = 5e-16 / D_ast;
-	const double c_se = 10000.0 / c_ast;
+	const double D_Lip = binary_se ? 2.5e-13 / D_ast : 2.6e-12 / D_ast;
+	const double D_X = 3.0e-13 / D_ast;
+	const double D_Li = 5e-16 / D_ast;
 	const double i_0_se_ap = 10.0 * L_ast / (F_ast * c_ast * D_ast);
 	const double i_0_se_Li = 10.0 * L_ast / (F_ast * c_ast * D_ast);
 	const double beta_se_ap = 0.5;
@@ -365,7 +363,7 @@ int main()
 	const double R = 8.3144 / R_ast;
 	const double F = 96485.33 / F_ast;
 
-	const double j_ap_bar = -1.0/dt_1 * B * L_ap * (c_ap_ref - (c_ap_V - 0.5 * 0.8 * c_ap_V)) * F;
+	const double j_ap_bar = -1.0/dt_1 * B * L_ap * (c_Li_ref - (c_ap_V - 0.5 * 0.8 * c_ap_V)) * F;
 	const double j_threshold_charging = 0.1;		// percentage of |j_ap_bar| at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.1;		// percentage of |j_ap_bar| at which discharging is stopped
 
@@ -392,15 +390,20 @@ int main()
  * independent fields *
  **********************/
 
-	InitialConstant<spacedim> c_ap_initial(c_ap_ref);
+	InitialConstant<spacedim> c_Li_initial(c_Li_ref);
+	InitialConstant<spacedim> c_Lip_initial(c_Lip_ref);
+	InitialConstant<spacedim> c_LiX_initial(c_LiX_ref);
 
-	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});				// displacement field (region 0 is solid electrolyte, region 1 is active material)
-	IndependentField<spacedim, spacedim> c_ap("c_ap", FE_Q<spacedim>(degree), 1, {1}, &c_ap_initial);	// Lithium concentration in active material
-	IndependentField<spacedim, spacedim> eta_ap("eta_ap", FE_Q<spacedim>(degree), 1, {1});				// chemical potential of Li in active material
-	IndependentField<spacedim, spacedim> eta_se("eta_se", FE_Q<spacedim>(degree), 1, {0});				// electrochemical potential of Li ions in solid electrolyte
-	IndependentField<0, spacedim> phi_ap("phi_ap");														// electrical scalar potential of active particles
-	IndependentField<0, spacedim> j_ap("j_ap");															// electrical current into active particles
-	IndependentField<0, spacedim> constant_displacement("constant_displacement");						// constant displacement for periodic b.c.
+	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});					// displacement field (region 0 is solid electrolyte, region 1 is active material)
+	IndependentField<spacedim, spacedim> c_Li("c_Li", FE_DGQ<spacedim>(degree), 1, {1}, &c_Li_initial);		// Lithium concentration in active material
+	IndependentField<spacedim, spacedim> c_Lip("c_Lip", FE_DGQ<spacedim>(degree), 1, {0}, &c_Lip_initial);	// Lithium ion concentration in solid electrolyte
+	IndependentField<spacedim, spacedim> c_LiX("c_LiX", FE_DGQ<spacedim>(degree), 1, {0}, &c_LiX_initial);	// salt concentration in solid electrolyte
+	IndependentField<spacedim, spacedim> eta_Li("eta_Li", FE_Q<spacedim>(degree), 1, {1});					// chemical potential of Li in active material
+	IndependentField<spacedim, spacedim> eta_Lip("eta_Lip", FE_Q<spacedim>(degree), 1, {0});				// electrochemical potential of Li+ ions in solid electrolyte
+	IndependentField<spacedim, spacedim> eta_X("eta_X", FE_Q<spacedim>(degree), 1, {0});					// electrochemical potential of X- ions in solid electrolyte
+	IndependentField<0, spacedim> phi_ap("phi_ap");															// electrical scalar potential of active particles
+	IndependentField<0, spacedim> j_ap("j_ap");																// electrical current into active particles
+	IndependentField<0, spacedim> constant_displacement("constant_displacement");							// constant displacement for periodic b.c.
 
 /********************
  * dependent fields *
@@ -433,49 +436,87 @@ int main()
 	}
 
 	// Lithium ion concentration in solid electrolyte
-	DependentField<spacedim, spacedim> c_se_("c_se_");
-	c_se_.add_term(c_se);
+	DependentField<spacedim, spacedim> c_Lip_("c_se_");
+	if(binary_se)
+		c_Lip_.add_term(1.0, c_Lip);
+	else
+		c_Lip_.add_term(c_Lip_ref);
+
+	// X- concentration in solid electrolyte (determined by local electroneutrality)
+	DependentField<spacedim, spacedim> c_X_("c_X_");
+	c_X_.add_term(1.0, c_Lip);
+
+	// salt concentration in solid electrolyte
+	DependentField<spacedim, spacedim> c_LiX_("c_LiX_");
+	c_LiX_.add_term(1.0, c_LiX);
+
+	// sum of Lithium ion concentration and salt concentration in solid electrolyte
+	DependentField<spacedim, spacedim> c_Lip_LipX_("c_Lip_LipX_");
+	if(binary_se)
+	{
+		c_Lip_LipX_.add_term(1.0, c_LiX);
+		c_Lip_LipX_.add_term(1.0, c_Lip);
+	}
+	else
+		c_Lip_LipX_.add_term(c_Lip_ref);
 
 	// Lithium concentration in active material
-	DependentField<spacedim, spacedim> c_ap_("c_ap_");
-	c_ap_.add_term(1.0, c_ap);
+	DependentField<spacedim, spacedim> c_Li_("c_Li_");
+	c_Li_.add_term(1.0, c_Li);
 
 	// vacancy concentration in active material
-	DependentField<spacedim, spacedim> c_ap_V_("c_ap_V");
-	c_ap_V_.add_term(-1.0, c_ap);
-	c_ap_V_.add_term(c_ap_V);
+	DependentField<spacedim, spacedim> c_V_("c_V");
+	c_V_.add_term(-1.0, c_Li);
+	c_V_.add_term(c_ap_V);
 
 	// chemical potential of Li in active material
-	DependentField<spacedim, spacedim> eta_ap_("eta_ap_");
-	DependentField<spacedim, spacedim> eta_ap_x("eta_ap_x");
-	DependentField<spacedim, spacedim> eta_ap_y("eta_ap_y");
-	DependentField<spacedim, spacedim> eta_ap_z("eta_ap_z");
-	eta_ap_.add_term(1.0, eta_ap);
-	eta_ap_x.add_term(1.0, eta_ap, 0, 0);
-	eta_ap_y.add_term(1.0, eta_ap, 0, 1);
+	DependentField<spacedim, spacedim> eta_Li_("eta_Li_");
+	DependentField<spacedim, spacedim> eta_Li_x("eta_Li_x");
+	DependentField<spacedim, spacedim> eta_Li_y("eta_Li_y");
+	DependentField<spacedim, spacedim> eta_Li_z("eta_Li_z");
+	eta_Li_.add_term(1.0, eta_Li);
+	eta_Li_x.add_term(1.0, eta_Li, 0, 0);
+	eta_Li_y.add_term(1.0, eta_Li, 0, 1);
 	if(spacedim == 3)
-		eta_ap_z.add_term(1.0, eta_ap, 0, 2);
+		eta_Li_z.add_term(1.0, eta_Li, 0, 2);
 
-	// electrochemical potential of Li ions in solid electrolyte
-	DependentField<spacedim, spacedim> eta_se_("eta_se_");
-	DependentField<spacedim, spacedim> eta_se_x("eta_se_x");
-	DependentField<spacedim, spacedim> eta_se_y("eta_se_y");
-	DependentField<spacedim, spacedim> eta_se_z("eta_se_z");
-	eta_se_.add_term(1.0, eta_se);
-	eta_se_x.add_term(1.0, eta_se, 0, 0);
-	eta_se_y.add_term(1.0, eta_se, 0, 1);
+	// electrochemical potential of Li+ ions in solid electrolyte
+	DependentField<spacedim, spacedim> eta_Lip_("eta_Lip_");
+	DependentField<spacedim, spacedim> eta_Lip_x("eta_Lip_x");
+	DependentField<spacedim, spacedim> eta_Lip_y("eta_Lip_y");
+	DependentField<spacedim, spacedim> eta_Lip_z("eta_Lip_z");
+	eta_Lip_.add_term(1.0, eta_Lip);
+	eta_Lip_x.add_term(1.0, eta_Lip, 0, 0);
+	eta_Lip_y.add_term(1.0, eta_Lip, 0, 1);
 	if(spacedim == 3)
-		eta_se_z.add_term(1.0, eta_se, 0, 2);
+		eta_Lip_z.add_term(1.0, eta_Lip, 0, 2);
+
+	// electrochemical potential of X- ions in solid electrolyte
+	DependentField<spacedim, spacedim> eta_X_("eta_X_");
+	DependentField<spacedim, spacedim> eta_X_x("eta_X_x");
+	DependentField<spacedim, spacedim> eta_X_y("eta_X_y");
+	DependentField<spacedim, spacedim> eta_X_z("eta_X_z");
+	eta_X_.add_term(1.0, eta_X);
+	eta_X_x.add_term(1.0, eta_X, 0, 0);
+	eta_X_y.add_term(1.0, eta_X, 0, 1);
+	if(spacedim == 3)
+		eta_X_z.add_term(1.0, eta_X, 0, 2);
+
+	// electrochemical potential of LiX salt in solid electrolyte (computed from dissociation equilibrium)
+	DependentField<spacedim, spacedim> eta_LiX_("eta_LiX_");
+	eta_LiX_.add_term(1.0, eta_Lip);
+	eta_LiX_.add_term(1.0, eta_X);
+
 
 	// potential difference on solid electrolyte - Lithium interface
 	DependentField<spacedim-1, spacedim> deta_se_Li("deta_se_Li");
-	deta_se_Li.add_term(-1.0, eta_se, 0, InterfaceSide::minus);
+	deta_se_Li.add_term(-1.0, eta_Lip, 0, InterfaceSide::minus);
 	deta_se_Li.add_term(eta_bar_Li);
 
 	// potential difference on solid electrolyte - active material interface
 	DependentField<spacedim-1, spacedim> deta_se_ap("deta_se_ap");
-	deta_se_ap.add_term(-1.0, eta_se, 0, InterfaceSide::minus);
-	deta_se_ap.add_term(1.0, eta_ap, 0, InterfaceSide::plus);
+	deta_se_ap.add_term(-1.0, eta_Lip, 0, InterfaceSide::minus);
+	deta_se_ap.add_term(1.0, eta_Li, 0, InterfaceSide::plus);
 	deta_se_ap.add_term(F, phi_ap);
 
 /********
@@ -564,79 +605,128 @@ int main()
 	GlobalDataIncrementalFE<spacedim> global_data;
 
 	// psi_se
-	KirchhoffMaterial00<spacedim> psi_se(	{F_xx, F_xy, F_xz, F_yx, F_yy, F_yz, F_zx, F_zy, F_zz, c_se_},
+	KirchhoffMaterial00<spacedim> psi_se(	{F_xx, F_xy, F_xz, F_yx, F_yy, F_yz, F_zx, F_zy, F_zz, c_Lip_LipX_},
 											{0},
 											QGauss<spacedim>(degree + 1),
 											global_data,
 											lambda_se,
 											mu_se,
-											0.0,
-											1.0,
+											binary_se ? deps_LiX : 0.0,
+											binary_se ? c_Lip_ref + c_LiX_ref : c_Lip_ref,
 											alpha);
 
 	// psi_ap_e
-	KirchhoffMaterial00<spacedim> psi_ap_e(	{F_xx, F_xy, F_xz, F_yx, F_yy, F_yz, F_zx, F_zy, F_zz, c_ap_},
+	KirchhoffMaterial00<spacedim> psi_ap_e(	{F_xx, F_xy, F_xz, F_yx, F_yy, F_yz, F_zx, F_zy, F_zz, c_Li_},
 												{1},
 												QGauss<spacedim>(degree + 1),
 												global_data,
 												lambda_ap,
 												mu_ap,
-												deps_ap,
-												c_ap_ref,
+												deps_Li,
+												c_Li_ref,
 												alpha);
 
 	// psi_ap_c (part 1)
-	PsiChemical00<spacedim> psi_ap_c_1(	{c_ap_},
+	PsiChemical00<spacedim> psi_ap_c_1(	{c_Li_},
 										{1},
-										QGaussLobatto<spacedim>(degree + 1),
+										QGauss<spacedim>(degree + 1),
 										global_data,
-										R*T, c_ap_ref, 0.0,
+										R*T, c_Li_ref, 0.0,
 										alpha,
 										eps_chemical);
 
 	// psi_ap_c (part 2)
-	PsiChemical00<spacedim> psi_ap_c_2(	{c_ap_V_},
+	PsiChemical00<spacedim> psi_ap_c_2(	{c_V_},
 										{1},
-										QGaussLobatto<spacedim>(degree + 1),
+										QGauss<spacedim>(degree + 1),
 										global_data,
-										R*T, c_ap_V - c_ap_ref, 0.0,
+										R*T, c_ap_V - c_Li_ref, 0.0,
 										alpha,
 										eps_chemical);
 
 	// psi_ap_c (part 3)
-	PsiChemical01<spacedim> psi_ap_c_3(	{c_ap_},
+	PsiChemical01<spacedim> psi_ap_c_3(	{c_Li_},
 										{1},
-										QGaussLobatto<spacedim>(degree + 1),
+										QGauss<spacedim>(degree + 1),
 										global_data,
-										dmu_ap/c_ap_V, c_ap_ref,
+										dmu_ap/c_ap_V, c_Li_ref,
 										alpha);
 
+	// psi_se_0_c (part 1)
+	PsiChemical00<spacedim> psi_se_c_1(	{c_LiX_},
+										{0},
+										QGauss<spacedim>(degree + 1),
+										global_data,
+										R*T, c_LiX_ref, 0.0,
+										alpha,
+										eps_chemical);
+
+	// psi_se_0_c (part 2)
+	PsiChemical00<spacedim> psi_se_c_2(	{c_Lip_},
+										{0},
+										QGauss<spacedim>(degree + 1),
+										global_data,
+										2.0 * R*T, c_Lip_ref, 0.0,
+										alpha,
+										eps_chemical);
 
 	// delta_se
-	OmegaDualFluxDissipation00<spacedim> delta_se(	{eta_se_x, eta_se_y, eta_se_z, c_se_},
+	OmegaDualFluxDissipation00<spacedim> delta_se(	{eta_Lip_x, eta_Lip_y, eta_Lip_z, c_Lip_},
 													{0},
 													QGauss<spacedim>(degree + 1),
 													global_data,
-													D_se/(R*T),
+													D_Lip/(R*T),
+													method,
+													alpha);
+
+	OmegaDualFluxDissipation00<spacedim> delta_se_X({eta_X_x, eta_X_y, eta_X_z, c_X_},
+													{0},
+													QGauss<spacedim>(degree + 1),
+													global_data,
+													D_X/(R*T),
 													method,
 													alpha);
 
 	// delta_ap
-	OmegaDualFluxDissipation00<spacedim> delta_ap(	{eta_ap_x, eta_ap_y, eta_ap_z, c_ap_},
+	OmegaDualFluxDissipation00<spacedim> delta_ap(	{eta_Li_x, eta_Li_y, eta_Li_z, c_Li_},
 													{1},
 													QGauss<spacedim>(degree + 1),
 													global_data,
-													D_ap/(R*T),
+													D_Li/(R*T),
 													method,
 													alpha);
 
 	// mixed term for active material
-	OmegaMixedTerm00<spacedim> omega_mixed_ap(	{c_ap_, eta_ap_},
+	OmegaMixedTerm00<spacedim> omega_mixed_ap(	{c_Li_, eta_Li_},
 												{1},
 												QGauss<spacedim>(degree + 1),
 												global_data,
 												method,
 												alpha);
+
+	// mixed term for solid electrolyte (part 1)
+	OmegaMixedTerm00<spacedim> omega_mixed_se_1(	{c_Lip_, eta_Lip_},
+													{0},
+													QGauss<spacedim>(degree + 1),
+													global_data,
+													method,
+													alpha);
+
+	// mixed term for solid electrolyte (part 2)
+	OmegaMixedTerm00<spacedim> omega_mixed_se_2(	{c_X_, eta_X_},
+													{0},
+													QGauss<spacedim>(degree + 1),
+													global_data,
+													method,
+													alpha);
+
+	// mixed term for solid electrolyte (part 3)
+	OmegaMixedTerm00<spacedim> omega_mixed_se_3(	{c_LiX_, eta_LiX_},
+													{0},
+													QGauss<spacedim>(degree + 1),
+													global_data,
+													method,
+													alpha);
 
 	// delta_se_Li
 	OmegaDualButlerVolmer00<spacedim> delta_se_Li(	{deta_se_Li},
@@ -662,9 +752,15 @@ int main()
 	TotalPotentialContribution<spacedim> psi_ap_c_1_tpc(psi_ap_c_1);
 	TotalPotentialContribution<spacedim> psi_ap_c_2_tpc(psi_ap_c_2);
 	TotalPotentialContribution<spacedim> psi_ap_c_3_tpc(psi_ap_c_3);
+	TotalPotentialContribution<spacedim> psi_se_c_1_tpc(psi_se_c_1);
+	TotalPotentialContribution<spacedim> psi_se_c_2_tpc(psi_se_c_2);
 	TotalPotentialContribution<spacedim> delta_se_tpc(delta_se);
+	TotalPotentialContribution<spacedim> delta_se_X_tpc(delta_se_X);
 	TotalPotentialContribution<spacedim> delta_ap_tpc(delta_ap);
 	TotalPotentialContribution<spacedim> omega_mixed_ap_tpc(omega_mixed_ap);
+	TotalPotentialContribution<spacedim> omega_mixed_se_1_tpc(omega_mixed_se_1);
+	TotalPotentialContribution<spacedim> omega_mixed_se_2_tpc(omega_mixed_se_2);
+	TotalPotentialContribution<spacedim> omega_mixed_se_3_tpc(omega_mixed_se_3);
 	TotalPotentialContribution<spacedim> delta_se_Li_tpc(delta_se_Li);
 	TotalPotentialContribution<spacedim> delta_se_ap_tpc(delta_se_ap);
 	vector<const ScalarFunctional<spacedim,spacedim>*> H_omega_electrical_loading;
@@ -687,6 +783,15 @@ int main()
 	total_potential.add_total_potential_contribution(delta_se_Li_tpc);
 	total_potential.add_total_potential_contribution(delta_se_ap_tpc);
 	total_potential.add_total_potential_contribution(electrical_loading_tpc);
+ 	if(binary_se)
+ 	{
+ 	 	total_potential.add_total_potential_contribution(psi_se_c_1_tpc);
+ 	 	total_potential.add_total_potential_contribution(psi_se_c_2_tpc);
+ 		total_potential.add_total_potential_contribution(delta_se_X_tpc);
+		total_potential.add_total_potential_contribution(omega_mixed_se_1_tpc);
+		total_potential.add_total_potential_contribution(omega_mixed_se_2_tpc);
+		total_potential.add_total_potential_contribution(omega_mixed_se_3_tpc);
+ 	}
 
 
 	// add constraints
@@ -718,25 +823,35 @@ int main()
 	global_data.set_output_level(0);
 
 	// postprocessors
-	StressPostprocessor<spacedim> stress_postproc_se(	"sigma_se",
+	vector<unsigned int> component_indices_c_se;
+	if(binary_se)
+	{
+		component_indices_c_se.push_back(fe_model.get_assembly_helper().get_u_omega_global_component_index(c_Lip));
+		component_indices_c_se.push_back(fe_model.get_assembly_helper().get_u_omega_global_component_index(c_LiX));
+	}
+	PressurePostprocessor<spacedim> stress_postproc_se(	"sigma_se",
 														fe_model.get_assembly_helper().get_u_omega_global_component_index(u),
-														fe_model.get_assembly_helper().get_u_omega_global_component_index(c_ap),	// doesn't matter
+														component_indices_c_se,
 														0,
 														lambda_se,
 														mu_se,
-														0.0,
-														c_se);
+														binary_se ? deps_LiX : 0.0,
+														c_Lip_ref + c_LiX_ref);
 	fe_model.attach_data_postprocessor_domain(stress_postproc_se);
 
-	StressPostprocessor<spacedim> stress_postproc_ap(	"sigma_ap",
+	PressurePostprocessor<spacedim> stress_postproc_ap(	"sigma_ap",
 														fe_model.get_assembly_helper().get_u_omega_global_component_index(u),
-														fe_model.get_assembly_helper().get_u_omega_global_component_index(c_ap),	// doesn't matter
+														{fe_model.get_assembly_helper().get_u_omega_global_component_index(c_Li)},
 														1,
 														lambda_ap,
 														mu_ap,
-														deps_ap,
-														c_ap_ref);
+														deps_Li,
+														c_Li_ref);
 	fe_model.attach_data_postprocessor_domain(stress_postproc_ap);
+
+	GradUPostprocessor<spacedim> grad_u(fe_model.get_assembly_helper().get_u_omega_global_component_index(u));
+	fe_model.attach_data_postprocessor_domain(grad_u);
+
 
 	const unsigned int dof_index_phi_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&phi_ap);
 	const unsigned int dof_index_j_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&j_ap);

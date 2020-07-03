@@ -37,7 +37,7 @@ private:
 	 * Index of concentration field
 	 */
 	const unsigned int
-	global_component_index_c;
+	global_component_indices_c;
 
 	/**
 	 * Material id for which this produces non-zero graphical output
@@ -81,7 +81,7 @@ public:
 	:
 	DataPostprocessorScalar<spacedim>(name, update_values | update_gradients),
 	global_component_index_u(global_component_index_u),
-	global_component_index_c(global_component_index_c),
+	global_component_indices_c(global_component_index_c),
 	material_id(material_id),
 	lambda(lambda),
 	mu(mu),
@@ -112,7 +112,7 @@ public:
 				for (unsigned int d = 0; d < 3; ++d)
 					F[d][d] += 1.0;
 
-				const double c = input_data.solution_values[dataset][global_component_index_c];
+				const double c = input_data.solution_values[dataset][global_component_indices_c];
 				E = 0.5 * (contract<0, 0>(F, F) - I) - deps/3.0 * (c/c_ref - 1.0) * I;
 				T = lambda * trace(E) * I + 2.0 * mu * E;
 				sigma = symmetrize(T);
