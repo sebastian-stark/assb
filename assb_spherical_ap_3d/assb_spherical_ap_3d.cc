@@ -1,9 +1,10 @@
-//#define PARALLEL
+#define PARALLEL
 
 #include <iostream>
 #include <fstream>
 
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_dgq.h>
 #include <deal.II/grid/grid_in.h>
 #include <deal.II/grid/manifold_lib.h>
 
@@ -331,8 +332,8 @@ int main()
 	// numerical parameters
 	const double eps_chemical = 1e-4;				// numerical parameter for regularization of chemical potential
 
-	const unsigned int n_refinements_global = 2;	// number of global refinements of cathode part of mesh
-	const unsigned int n_refinements_sing_edge = 3;	// number of refinements at edge with stress singularity
+	const unsigned int n_refinements_global = 2;	// number of global refinements of cathode part of mesh (2)
+	const unsigned int n_refinements_sing_edge = 3;	// number of refinements at edge with stress singularity (3)
 
 	const double alpha = 0.5;						// time integration parameter alpha
 	const unsigned int method = 2;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
@@ -353,7 +354,7 @@ int main()
 	InitialConstant<spacedim> c_ap_initial(c_ap_ref);
 
 	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});				// displacement field (region 0 is solid electrolyte, region 1 is active material)
-	IndependentField<spacedim, spacedim> c_ap("c_ap", FE_Q<spacedim>(degree), 1, {1}, &c_ap_initial);	// Lithium concentration in active material
+	IndependentField<spacedim, spacedim> c_ap("c_ap", FE_DGQ<spacedim>(degree), 1, {1}, &c_ap_initial);	// Lithium concentration in active material
 	IndependentField<spacedim, spacedim> eta_ap("eta_ap", FE_Q<spacedim>(degree), 1, {1});				// chemical potential of Li in active material
 	IndependentField<spacedim, spacedim> eta_se("eta_se", FE_Q<spacedim>(degree), 1, {0});				// electrochemical potential of Li ions in solid electrolyte
 	IndependentField<0, spacedim> phi_ap("phi_ap");														// electrical scalar potential of active particles
@@ -773,7 +774,9 @@ int main()
 	}
 	else
 	{
+#ifndef PARALLEL
 		cout << "Not able to enforce displacement constraint in z-direction" << endl;
+#endif
 	}
 
 	// postprocessors
