@@ -337,20 +337,18 @@ int main()
 	const double dt_1 = 2700.0 * D_ast / (L_ast * L_ast);
 
 	const double T = 293.15 / T_ast;
+
 	const double c_Li_ref = 47500.0 / c_ast;
 	const double c_Lip_ref = binary_se ? 750.0 / c_ast : 10000.0 / c_ast;
 	const double c_LiX_ref = 750.0 / c_ast;
 
 	const double lambda_se = binary_se ? 5e6 / (R_ast * T_ast * c_ast) : 57.7e9 / (R_ast * T_ast * c_ast);
 	const double mu_se = binary_se ? 5e6 / (R_ast * T_ast * c_ast) : 38.5e9 / (R_ast * T_ast * c_ast);
-	cout << lambda_se << endl;
-	cout << mu_se << endl;
-	return 0;
 	const double lambda_ap = 50.6e9 / (R_ast * T_ast * c_ast);
 	const double mu_ap = 80e9 / (R_ast * T_ast * c_ast);
 	const double deps_Li = -0.04;
 	const double deps_LiX = 0.2;
-	const double c_ap_V = 50000.0 / c_ast;
+	const double c_V = 50000.0 / c_ast;
 	const double dmu_ap = 70000.0 / (R_ast * T_ast);
 	const double D_Lip = binary_se ? 2.5e-13 / D_ast : 2.6e-12 / D_ast;
 	const double D_X = 3.0e-13 / D_ast;
@@ -363,7 +361,7 @@ int main()
 	const double R = 8.3144 / R_ast;
 	const double F = 96485.33 / F_ast;
 
-	const double j_ap_bar = -1.0/dt_1 * B * L_ap * (c_Li_ref - (c_ap_V - 0.5 * 0.8 * c_ap_V)) * F;
+	const double j_ap_bar = -1.0/dt_1 * B * L_ap * (c_Li_ref - (c_V - 0.5 * 0.8 * c_V)) * F;
 	const double j_threshold_charging = 0.1;		// percentage of |j_ap_bar| at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.1;		// percentage of |j_ap_bar| at which discharging is stopped
 
@@ -375,11 +373,11 @@ int main()
 	const unsigned int n_refinements_local = 1;		// number of local refinements at interface between solid electrolyte and active particles
 	const unsigned int n_refinements_global = 1;	// number of global refinements
 
-	const double alpha = 1.0;						// time integration parameter alpha
-	const unsigned int method = 0;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
+	const double alpha = 0.5;						// time integration parameter alpha
+	const unsigned int method = 2;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
 	const unsigned N_1 = 20;						// nominal number of time steps for first loading step (automatic time stepping adjusts of necessary)
 
-	const unsigned int degree = 2;					// degree of approximation of finite elements
+	const unsigned int degree = 1;					// degree of approximation of finite elements
 
 	// mappings
 	MappingQGeneric<spacedim, spacedim> mapping_domain(1);		// FE mapping on domain
@@ -436,7 +434,7 @@ int main()
 	}
 
 	// Lithium ion concentration in solid electrolyte
-	DependentField<spacedim, spacedim> c_Lip_("c_se_");
+	DependentField<spacedim, spacedim> c_Lip_("c_Lip_");
 	if(binary_se)
 		c_Lip_.add_term(1.0, c_Lip);
 	else
@@ -467,7 +465,7 @@ int main()
 	// vacancy concentration in active material
 	DependentField<spacedim, spacedim> c_V_("c_V");
 	c_V_.add_term(-1.0, c_Li);
-	c_V_.add_term(c_ap_V);
+	c_V_.add_term(c_V);
 
 	// chemical potential of Li in active material
 	DependentField<spacedim, spacedim> eta_Li_("eta_Li_");
@@ -506,7 +504,6 @@ int main()
 	DependentField<spacedim, spacedim> eta_LiX_("eta_LiX_");
 	eta_LiX_.add_term(1.0, eta_Lip);
 	eta_LiX_.add_term(1.0, eta_X);
-
 
 	// potential difference on solid electrolyte - Lithium interface
 	DependentField<spacedim-1, spacedim> deta_se_Li("deta_se_Li");
@@ -640,7 +637,7 @@ int main()
 										{1},
 										QGauss<spacedim>(degree + 1),
 										global_data,
-										R*T, c_ap_V - c_Li_ref, 0.0,
+										R*T, c_V - c_Li_ref, 0.0,
 										alpha,
 										eps_chemical);
 
@@ -649,7 +646,7 @@ int main()
 										{1},
 										QGauss<spacedim>(degree + 1),
 										global_data,
-										dmu_ap/c_ap_V, c_Li_ref,
+										dmu_ap/c_V, c_Li_ref,
 										alpha);
 
 	// psi_se_0_c (part 1)
@@ -793,7 +790,6 @@ int main()
 		total_potential.add_total_potential_contribution(omega_mixed_se_3_tpc);
  	}
 
-
 	// add constraints
 	// u_x
 	DirichletConstraint<spacedim> dc_u_x(u, 0, InterfaceSide::minus, {0});
@@ -851,7 +847,6 @@ int main()
 
 	GradUPostprocessor<spacedim> grad_u(fe_model.get_assembly_helper().get_u_omega_global_component_index(u));
 	fe_model.attach_data_postprocessor_domain(grad_u);
-
 
 	const unsigned int dof_index_phi_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&phi_ap);
 	const unsigned int dof_index_j_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&j_ap);
