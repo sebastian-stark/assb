@@ -522,13 +522,13 @@ double make_mesh_3d(const unsigned int 	N_ap,
 int main()
 {
 // 2d or 3d mesh
-	const unsigned int mesh_dimension = 3;
+	const unsigned int mesh_dimension = 2;
 
 // make 3d mesh, which is used for extraction of 2d mesh
-	const unsigned int N_ap = 5;
-	const unsigned int N_se = 12;
-	const double L_ap = 15.0;
-	const double L_se = 15.0;
+	const unsigned int N_ap = 1;
+	const unsigned int N_se = 4;
+	const double L_ap = 3.0;
+	const double L_se = 3.0;
 	Triangulation<3>	tria_domain_3d;
 	const double scale_factor = make_mesh_3d(N_ap, N_se, L_ap, L_se, tria_domain_3d);
 

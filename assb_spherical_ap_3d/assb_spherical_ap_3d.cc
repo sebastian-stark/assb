@@ -19,7 +19,6 @@ using namespace dealii;
 using namespace dealii::GalerkinTools;
 using namespace incrementalFE;
 
-
 /**
  * postprocessor computing the pressure from the displacement field
  */
@@ -96,9 +95,9 @@ public:
 							vector<Vector<double>>&								computed_quantities)
 	const override
 	{
-		const static Tensor<2, 3> I = unit_symmetric_tensor<3,double>();
-		static Tensor<2, 3> F, E, T;
-		static SymmetricTensor<2,3> sigma, s;
+		const Tensor<2, 3> I = unit_symmetric_tensor<3,double>();
+		Tensor<2, 3> F, E, T;
+		SymmetricTensor<2,3> sigma, s;
 		const auto current_cell = input_data.template get_cell<hp::DoFHandler<spacedim>>();
 
 		for (unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
@@ -316,7 +315,7 @@ int main()
 
 	const unsigned int spacedim = 3;	// this currently doesn't work for anything else than spacedim == 2
 
-	const bool binary_se = true;		// if true, use relations for binary solid electrolyte
+	const bool binary_se = false;		// if true, use relations for binary solid electrolyte
 
 /**************
  * parameters *
@@ -336,7 +335,7 @@ int main()
 	const double B_ap = 1.5e-6 / L_ast;
 	const unsigned int N_ap = 5;
 
-	const double dt_1 = 9000.0 * D_ast / (L_ast * L_ast);
+	const double dt_1 = 1800.0 * D_ast / (L_ast * L_ast);
 	const double T = 293.15 / T_ast;
 
 	const double c_Li_ref = 47500.0 / c_ast;
@@ -382,6 +381,7 @@ int main()
 	const unsigned int method = 2;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
 	const double inc_0 = dt_1 / 1000.0;				// initial time increment
 	const double inc_max = dt_1 / 20.0;				// maximum time increment
+	const double resistance_factor = 0.01;			// scaling factor for resistance
 
 	const unsigned int degree = 1;					// degree of approximation of finite elements
 
@@ -979,7 +979,7 @@ int main()
 	vector<tuple<double, double, double>> phi_j;
 
 	// iteration settings
-	global_data.set_max_iter(50);
+	global_data.set_max_iter(20);
 	global_data.set_max_cutbacks(1);
 
 // first step
@@ -1012,9 +1012,7 @@ int main()
 		if(iter >= 0)
 		{
 			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
-			const double phi_step = fe_model.get_solution_vector()(dof_index_phi_ap);
-			const double t_step = new_time - (1.0 - alpha) * inc;
-			phi_j.push_back(make_tuple(t_step, phi_step, j_ap_bar));
+			phi_j.push_back(make_tuple(new_time, fe_model.get_solution_vector()(dof_index_phi_ap), j_ap_bar));
 			if(new_time == cutoff_time)
 				break;
 			if(iter < 4)
@@ -1070,9 +1068,9 @@ int main()
 	cout << "Second step completed" << endl;
 
 // third step
-	inc = inc_0;
+	inc = inc_0 * resistance_factor;
 	electrical_loading_tpc.loading_type = 2;
-	electrical_loading_tpc.R_el = fabs(fe_model.get_solution_vector()(dof_index_phi_ap) / (j_ap_bar));
+	electrical_loading_tpc.R_el = fabs(fe_model.get_solution_vector()(dof_index_phi_ap) / (j_ap_bar)) * resistance_factor;
 	for(;;)
 	{
 		double new_time = global_data.get_t() + inc;
