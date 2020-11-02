@@ -12,6 +12,8 @@
 #include <deal.II/fe/fe_dgq.h>
 #include <deal.II/grid/grid_in.h>
 #include <deal.II/grid/manifold_lib.h>
+#include <deal.II/dofs/dof_tools.h>
+#include <deal.II/grid/grid_generator.h>
 
 #include <galerkin_tools/assembly_helper.h>
 
@@ -53,7 +55,14 @@ public:
 };
 
 // the main program
-int main()
+vector<double>									// time increment size dt, error infty norm, error l2 norm (quantities only computed if write_reference == false)
+solve(	const unsigned int 	m_t,				// number of refinements in time
+		const unsigned int 	m_h,				// number of refinements in space
+		const double		alpha,				// time integration parameter alpha
+		const unsigned int	method,				// time integration method (0 - variationally consistent, 1 - alpha family, 2 - modified alpha family)
+		const unsigned int	degree,				// degree of polynomial approximation of finite elements (1 - linear, 2 - quadratic, etc.)
+		const string 		result_file,		// if write_reference == true: file into which solution vector is stored, if write_reference == false: file containing solution vector to compare with
+		const bool			write_reference)	// whether to write reference solution or to compare with it
 {
 
 /********************
@@ -101,20 +110,18 @@ int main()
 	const double T = 293.15 / T_ast;
 
 	// loading
-	const double dt = 600.0 * D_ast / (L_ast * L_ast);							// duration of loading steps
+	const double t_1 = 600.0 * D_ast / (L_ast * L_ast);							// duration of loading steps
 	const double j_ap_bar = -1e-17 / (F_ast * c_ast * L_ast * L_ast * D_ast);	// constant current charging current
 	const double R_el = 4.0 * F_ast / (R_ast * T_ast) / fabs(j_ap_bar);			// electrical resistance (determined such that current equals constant current charging current in magnitude if voltage is 4 V)
 
 	// numerical parameters
-	const double eps_chemical = 1e-4;				// numerical parameter for regularization of chemical potential
-	const unsigned int n_refinements_sing_edge = 3;	// number of refinements at edge with stress singularity
-	const double alpha = 0.5;						// time integration parameter alpha
-	const unsigned int method = 2;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
-	const unsigned N_1 = 20;						// nominal number of time steps for first loading step (automatic time stepping adjusts if necessary)
-	const unsigned int degree = 1;					// degree of approximation of finite elements
-	const unsigned int cell_divisions = degree;		// cell divisions for output
-	const unsigned int solver_sym = 0;				// solver for method != 1: 0 - PARDISO, 1 - MA57, else - UMFPACK
-	const unsigned int solver_unsym = 0;			// solver for method == 1: 0 - PARDISO, else - UMFPACK
+	const double eps_chemical = 1e-4;					// numerical parameter for regularization of chemical potential
+	const unsigned int N_refinements_sing_edge = 3;		// number of refinements at edge with stress singularity
+	const unsigned int N_refinements_global = m_h;		// number of global mesh refinements
+	const unsigned N_1 = pow(2.0, (double)m_t) + 0.5;	// nominal number of time steps per loading step
+	const unsigned int cell_divisions = degree;			// cell divisions for output
+	const unsigned int solver_sym = 0;					// solver for method != 1: 0 - PARDISO, 1 - MA57, else - UMFPACK
+	const unsigned int solver_unsym = 0;				// solver for method == 1: 0 - PARDISO, else - UMFPACK
 
 	// mappings
 	MappingQGeneric<spacedim, spacedim> mapping_domain(degree);			// FE mapping on domain
@@ -125,7 +132,7 @@ int main()
 
 	// define some parameters for the problem solution
 	global_data.set_compute_sparsity_pattern(1);
-	global_data.set_max_iter(20);
+	global_data.set_max_iter(100);
 	global_data.set_max_cutbacks(1);
 	global_data.set_threshold_residual(1e-12);
 	global_data.set_perform_line_search(false);
@@ -212,14 +219,19 @@ int main()
 	// mesh refinement at singular edge
 	const Point<spacedim> p1(2.0 * B / 3.0, B);
 	const Point<spacedim> p2(4.0 * B / 3.0, B);
-	for(unsigned int refinement_step = 0; refinement_step < n_refinements_sing_edge; ++refinement_step)
+	const Point<spacedim> p3(0.0, B / 3.0);
+	const Point<spacedim> p4(2.0 * B, B / 3.0);
+	for(unsigned int refinement_step = 0; refinement_step < N_refinements_sing_edge; ++refinement_step)
 	{
 		for(const auto& cell : tria_domain.active_cell_iterators())
 			for(unsigned int v = 0; v < GeometryInfo<spacedim>::vertices_per_cell; ++v)
-				if( ( fabs(cell->vertex(v).distance(p1)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p2)) < 1e-12 ) )
+				if( ( fabs(cell->vertex(v).distance(p1)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p2)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p3)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p4)) < 1e-12 ) )
 					cell->set_refine_flag();
 		tria_domain.execute_coarsening_and_refinement();
 	}
+
+	// global mesh refinement
+	tria_domain.refine_global(N_refinements_global);
 
 	// fix hanging node positions where manifold is not flat (mathematically probably not strictly necessary - but looks better and apparently works better in practice)
 	for(const auto& cell : tria_domain.active_cell_iterators())
@@ -246,13 +258,14 @@ int main()
 		}
 	}
 
-/************
- * unknowns *
- ************/
+/**************************************
+ * unknowns and Dirichlet constraints *
+ **************************************/
 
 	ConstantFunction<spacedim> c_Li_initial(c_Li_ref);														// initial condition Lithium concentration in active particles
 	ConstantFunction<spacedim> c_LiX_initial(c_LiX_ref);													// initial condition salt concentration in solid electrolyte
 	ConstantFunction<spacedim> c_Lip_initial(c_Lip_ref);													// initial condition Lithium ion concentration in solid electrolyte
+	RampFunction<spacedim> current_ramp(j_ap_bar);															// define ramp function for current ramp for first loading step
 
 	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});					// displacement field (region 0 is solid electrolyte, region 1 is active particle region)
 	IndependentField<spacedim, spacedim> c_Li("c_Li", FE_DGQ<spacedim>(degree), 1, {1}, &c_Li_initial);		// Lithium concentration in active particles
@@ -266,6 +279,19 @@ int main()
 	IndependentField<0, spacedim> phi("phi");																// voltage
 	IndependentField<0, spacedim> J("J");																	// total electrical current
 	IndependentField<0, spacedim> u_N("u_N");																// constant displacement for periodic b.c.
+
+	// define constraints for function spaces
+	DirichletConstraint<spacedim> dc_u_y_bottom(u, 1, InterfaceSide::minus, {4, 5});						// normal displacement constraint at bottom of domain
+	DirichletConstraint<spacedim> dc_u_y_top(u, 1, InterfaceSide::minus, {6, 7}, nullptr, &u_N);			// normal displacement constraint at top of domain
+	PointConstraint<spacedim, spacedim> dc_u_x(u, 0, Point<spacedim>(-0.5 * L, 0.0));						// lateral displacement constraint at single point
+	PointConstraint<0, spacedim> dc_J(J, 0, Point<spacedim>(), &current_ramp); 								// current ramp constraint for first loading step
+
+	// finally assemble the constraints into the constraints object
+	Constraints<spacedim> constraints;
+	constraints.add_dirichlet_constraint(dc_u_y_bottom);
+	constraints.add_dirichlet_constraint(dc_u_y_top);
+	constraints.add_point_constraint(dc_u_x);
+	constraints.add_point_constraint(dc_J);
 
 /********************
  * dependent fields *
@@ -558,28 +584,11 @@ int main()
 	total_potential.add_total_potential_contribution(omega_se_ap_tpc);
 	total_potential.add_total_potential_contribution(electrical_loading_tpc);
 
-/*************************
- * Dirichlet constraints *
- *************************/
-
-	RampFunction<spacedim> current_ramp(j_ap_bar);													// define ramp function for current ramp for first loading step
-
-	// define the individual constraints
-	DirichletConstraint<spacedim> dc_u_y_bottom(u, 1, InterfaceSide::minus, {4, 5});				// normal displacement constraint at bottom of domain
-	DirichletConstraint<spacedim> dc_u_y_top(u, 1, InterfaceSide::minus, {6, 7}, nullptr, &u_N);	// normal displacement constraint at top of domain
-	PointConstraint<spacedim, spacedim> dc_u_x(u, 0, Point<spacedim>(-0.5 * L, 0.0));				// lateral displacement constraint at single point
-	PointConstraint<0, spacedim> dc_J(J, 0, Point<spacedim>(), &current_ramp); 						// current ramp constraint for first loading step
-
-	// finally assemble the constraints into the constraints object
-	Constraints<spacedim> constraints;
-	constraints.add_dirichlet_constraint(dc_u_y_bottom);
-	constraints.add_dirichlet_constraint(dc_u_y_top);
-	constraints.add_point_constraint(dc_u_x);
-	constraints.add_point_constraint(dc_J);
-
 /***************************
  * Solution of the problem *
  ***************************/
+
+	bool error = false;
 
 	// define different solvers
 	BlockSolverWrapperPARDISO solver_wrapper_pardiso;
@@ -644,33 +653,39 @@ int main()
 	// vector to store values (t, phi, J_dot)
 	vector<tuple<double, double, double>> phi_j;
 
+	// string for file names
+	const string variant_string = "_" + Utilities::to_string(alpha)
+								+ "_" + Utilities::to_string(method)
+								+ "_" + Utilities::to_string(degree);
+
 // first loading step (constant current loading)
 
 	electrical_loading_tpc.loading_type = 0;
 	electrical_loading_tpc.j_bar = j_ap_bar;
 
-	double start_time = global_data.get_t();
-	double end_time = start_time + dt;
-	double inc = (end_time - start_time)/(double)N_1;
-	for(;;)
-	{
-		double new_time = global_data.get_t() + inc;
-		if(new_time > end_time)
-			new_time = end_time;
-		cout << "Old time=" << global_data.get_t() << endl;
-		cout << "New time=" << new_time << endl;
+	// quantities for linear extrapolation of potential to end of time step
+	double phi_old = 0.0;
+	double phi_pred = 0.0;
 
-		const int iter = fe_model.do_time_step(new_time);
+	double inc = t_1/(double)N_1;
+	double t = 0.0;
+	for(unsigned int step = 0; step < N_1; ++step)
+	{
+		cout << "time step " << step + 1 <<" of " << 3 * N_1 << endl;
+		t += inc;
+
+		const int iter = fe_model.do_time_step(t);
 		if(iter >= 0)
 		{
-			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
-			phi_j.push_back(make_tuple(new_time, fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc));
-			if(new_time == end_time)
-				break;
+			fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
+			phi_pred = fe_model.get_solution_vector()(dof_index_phi_ap) + (1.0 - alpha) * (fe_model.get_solution_vector()(dof_index_phi_ap) - phi_old);
+			phi_old = fe_model.get_solution_vector()(dof_index_phi_ap);
+			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), phi_pred, (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc));
 		}
 		else
 		{
 			cout << "ERROR, Computation failed!" << endl;
+			error = true;
 			global_data.print_error_messages();
 			break;
 		}
@@ -680,10 +695,8 @@ int main()
 // second loading step (constant voltage loading)
 
 	electrical_loading_tpc.loading_type = 1;
-	electrical_loading_tpc.phi = fe_model.get_solution_vector()(dof_index_phi_ap);
+	electrical_loading_tpc.phi = phi_pred;
 	dc_J.set_constraint_is_active(false);	// deactivate constraint for time-integrated current
-	start_time = global_data.get_t();
-	end_time = start_time + dt;
 
 	// re-analyze sparsity pattern and matrix once as constraints have changed
 	solver_wrapper_pardiso.analyze = 1;
@@ -691,25 +704,23 @@ int main()
 	solver_wrapper_ma57.analyze = 1;
 	global_data.set_compute_sparsity_pattern(1);
 
-	for(;;)
+	for(unsigned int step = 0; step < N_1; ++step)
 	{
-		double new_time = global_data.get_t() + inc;
-		if(new_time > end_time)
-			new_time = end_time;
-		cout << "Old time=" << global_data.get_t() << endl;
-		cout << "New time=" << new_time << endl;
+		cout << "time step " << step + 1 + N_1 <<" of " << 3 * N_1 << endl;
+		t += inc;
 
-		const int iter = fe_model.do_time_step(new_time);
+		const int iter = fe_model.do_time_step(t);
 		if(iter >= 0)
 		{
-			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
-			phi_j.push_back(make_tuple(new_time, fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc) );
-			if(new_time == end_time)
-				break;
+			fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
+			phi_pred = fe_model.get_solution_vector()(dof_index_phi_ap) + (1.0 - alpha) * (fe_model.get_solution_vector()(dof_index_phi_ap) - phi_old);
+			phi_old = fe_model.get_solution_vector()(dof_index_phi_ap);
+			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), phi_pred, (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc) );
 		}
 		else
 		{
 			cout << "ERROR, Computation failed!" << endl;
+			error = true;
 			global_data.print_error_messages();
 			break;
 		}
@@ -721,8 +732,6 @@ int main()
 	electrical_loading_tpc.loading_type = 2;
 	electrical_loading_tpc.R_el = R_el;
 	dc_J.set_constraint_is_active(true);	// formally activate the constraint for time-integrated current again - the value to which it is constrained here is immaterial (the constraint is only needed to make the linear systems definite).
-	start_time = global_data.get_t();
-	end_time = start_time + dt;
 
 	// re-analyze sparsity pattern and matrix once as constraints have changed
 	solver_wrapper_pardiso.analyze = 1;
@@ -730,25 +739,23 @@ int main()
 	solver_wrapper_ma57.analyze = 1;
 	global_data.set_compute_sparsity_pattern(1);
 
-	for(;;)
+	for(unsigned int step = 0; step < N_1; ++step)
 	{
-		double new_time = global_data.get_t() + inc;
-		if(new_time > end_time)
-			new_time = end_time;
-		cout << "Old time=" << global_data.get_t() << endl;
-		cout << "New time=" << new_time << endl;
+		cout << "time step " << step + 1 + N_1 + N_1 <<" of " << 3 * N_1 << endl;
+		t += inc;
 
-		const int iter = fe_model.do_time_step(new_time);
+		const int iter = fe_model.do_time_step(t);
 		if(iter >= 0)
 		{
-			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
-			phi_j.push_back(make_tuple(new_time, fe_model.get_solution_vector()(dof_index_phi_ap), -fe_model.get_solution_vector()(dof_index_phi_ap)/electrical_loading_tpc.R_el));
-			if(new_time == end_time)
-				break;
+			fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
+			phi_pred = fe_model.get_solution_vector()(dof_index_phi_ap) + (1.0 - alpha) * (fe_model.get_solution_vector()(dof_index_phi_ap) - phi_old);
+			phi_old = fe_model.get_solution_vector()(dof_index_phi_ap);
+			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), phi_pred, -fe_model.get_solution_vector()(dof_index_phi_ap)/electrical_loading_tpc.R_el));
 		}
 		else
 		{
 			cout << "ERROR, Computation failed!" << endl;
+			error = true;
 			global_data.print_error_messages();
 			break;
 		}
@@ -756,14 +763,87 @@ int main()
 	}
 	global_data.print_error_messages();
 
-// write global results to file and print to screen (current, voltage)
-
-	FILE* printout = fopen ("results/independent_scalars.dat", "w");
-	for(const auto& phi_j_el : phi_j)
+	// write only reference solution
+	if(write_reference)
 	{
-		fprintf(printout, "%- 1.16e %- 1.16e %- 1.16e\n", get<0>(phi_j_el), get<1>(phi_j_el), get<2>(phi_j_el));
-		printf("%- 10.2f %- 10.2f %- 10.2f\n", get<0>(phi_j_el), get<1>(phi_j_el), get<2>(phi_j_el));
+		fe_model.write_solution_to_file(result_file);
+		return vector<double>();
 	}
-	fclose(printout);
+	// compare with reference solution
+	else
+	{
+		FEModel<spacedim, Vector<double>, BlockVector<double>, GalerkinTools::TwoBlockMatrix<SparseMatrix<double>>> fe_model_reference(total_potential, tria_system, mapping_domain, mapping_interface, global_data, constraints, *solver_wrapper);
+		fe_model_reference.read_solution_from_file(result_file);
+
+		const double dt = t_1 / (double)N_1;
+		ComponentMask cm_domain(DoFTools::n_components(fe_model.get_assembly_helper().get_dof_handler_system().get_dof_handler_domain()), false);
+
+		for(unsigned int i = 0; i < spacedim; ++i)
+			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(u)+i, true);
+		cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Li), true);
+		cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_LiX), true);
+		cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Lip), true);
+
+		double d_linfty = 1e16;
+		double d_l2 = 1e16;
+		if(!error)
+		{
+			d_linfty = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::Linfty_norm, cm_domain, ComponentMask(), 0.0).first;
+			d_l2 = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::L2_norm, cm_domain, ComponentMask(), 0.0).first;
+		}
+		return {dt, d_linfty, d_l2};
+	}
+
+
+}
+
+int main()
+{
+	const unsigned int m_t_max = 11;	// maximum number of refinements in time for convergence study
+//	const unsigned int m_h_max = 3;		// maximum number of refinements in space for convergence study
+
+//	const unsigned int m_t = 3;			// number of refinements in time to be used for convergence study in space
+	const unsigned int m_h = 1;			// number of refinements in space to be used for convergence study in time
+
+	// time integration methods to be studied
+	vector<pair<double, unsigned int>> methods_t;
+	methods_t.push_back(make_pair(0.5, 1));
+	methods_t.push_back(make_pair(1.0, 0));
+	methods_t.push_back(make_pair(0.5, 2));
+
+	// polynomial degrees of finite elements to be studied
+	vector<unsigned int> degrees;
+	degrees.push_back(1);
+	degrees.push_back(2);
+
+	// convergence study in time
+	for(const auto degree : degrees)
+	{
+		for(const auto method : methods_t)
+		{
+			const string variant_string = "_" + Utilities::to_string(method.first)
+										+ "_" + Utilities::to_string(method.second)
+										+ "_" + Utilities::to_string(degree);
+
+			const string file_name_res	= "results/results" + variant_string + ".dat";				// file where results are stored
+			const string file_name_ref	= "results/results" + variant_string + "_ref.dat";			// file where results are stored
+
+			// generate reference solution
+			solve(m_t_max + 1, m_h, method.first, method.second, degree, file_name_ref, true);
+
+			// clear file
+			FILE* printout = fopen(file_name_res.c_str(),"w");
+			fclose(printout);
+
+			// compare
+			for(unsigned int m = 0; m < m_t_max + 1; ++m)
+			{
+				const auto result_data = solve(m, m_h, method.first, method.second, degree, file_name_ref, false);
+				FILE* printout_ = fopen(file_name_res.c_str(),"a");
+				fprintf(printout_, "%- 1.16e %- 1.16e %- 1.16e\n", result_data[0], result_data[1], result_data[2]);
+				fclose(printout_);
+			}
+		}
+	}
 
 }
