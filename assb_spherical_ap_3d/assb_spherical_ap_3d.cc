@@ -366,6 +366,8 @@ int main()
 	const double V_s = N_ap * 1.0/3.0 * numbers::PI * R_ap * R_ap * R_ap;
 	const double V_kk = N_ap * 1.5 * numbers::PI / 3.0 * h_ap * h_ap * (3.0 * R_ap - h_ap);
 	const double j_ap_bar = -1.0/dt_1 * (V_s - V_kk) * (c_Li_ref - (c_V - 1.0 * 0.5 * c_V)) * F;
+	cout << j_ap_bar << endl;
+	return 0;
 	const double j_threshold_charging = 0.03;		// percentage of |j_ap_bar| at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.03;	// percentage of |j_ap_bar| at which discharging is stopped
 	const double phi_bar = eta_bar_Li - (R * T * log(0.5 * c_V / c_Li_ref) + dmu_ap * ( 0.5 - c_Li_ref / c_V ) ) / F;	// potential difference corresponding to 100 % charged state

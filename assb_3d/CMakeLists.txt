@@ -10,10 +10,10 @@
 
 CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
 
-PROJECT("ASSB_PLANE_STRAIN")
+PROJECT("ASSB_3D")
 
 #name of executable and source files from which executable is compiled
-SET(_target "assb_plane_strain")
+SET(_target "assb_3d")
 SET(_target_src ${_target}.cc)
 
 #Determine whether to build in Release or Debug mode
@@ -97,4 +97,3 @@ TARGET_INCLUDE_DIRECTORIES(${_target} PRIVATE ${DEAL_II_INCLUDE_DIRS})
 
 #make directories for results
 FILE(MAKE_DIRECTORY "results")
-FILE(MAKE_DIRECTORY "results/output_files")

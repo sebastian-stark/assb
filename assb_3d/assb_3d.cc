@@ -1,7 +1,7 @@
 /**
  * Copyright (C) 2020 by Sebastian Stark
  *
- * Plane strain all solid state battery example according to Sect. 5.1 of manuscript "A unified approach to standard dissipative continua with application to electrochemomechanically coupled problems"
+ * 3d all solid state battery example according to Sect. 5.1 of manuscript "A unified approach to standard dissipative continua with application to electrochemomechanically coupled problems"
  * For details regarding the physical situation simulated with this program, see this manuscript.
  */
 
@@ -54,24 +54,59 @@ public:
 	}
 };
 
+// post-processor computing determinant of deformation gradient
+template<unsigned int spacedim>
+class PostprocessorJ : public DataPostprocessorScalar<spacedim>
+{
+	// global component index of first component of displacement field
+	const unsigned int
+	global_component_index_u;
+
+public:
+	PostprocessorJ(	const string&		name,
+					const unsigned int	global_component_index_u)
+	:
+	DataPostprocessorScalar<spacedim>(name, update_gradients),
+	global_component_index_u(global_component_index_u)
+	{
+	}
+
+	void
+	evaluate_vector_field(	const DataPostprocessorInputs::Vector<spacedim>&	input_data,
+							vector<Vector<double>>&								computed_quantities)
+	const
+	{
+
+		double avg = 0.0;
+		for(unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
+		{
+			Tensor<2, spacedim> F;
+			for(unsigned int m = 0; m < spacedim; ++m)
+			{
+				F[m][m] += 1.0;
+				for(unsigned int n = 0; n < spacedim; ++n)
+					F[m][n] += input_data.solution_gradients[dataset][global_component_index_u + m][n];
+			}
+			const double J = determinant(F);
+			avg += J;
+		}
+		avg *= 1.0/input_data.solution_gradients.size();
+
+		for(unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
+			computed_quantities[dataset][0] = avg;
+	}
+};
+
+
 // the main program
-vector<double>									// time increment size dt, error infty norm, error l2 norm (quantities only computed if write_reference == false)
-solve(	const unsigned int 	m_t,				// number of refinements in time
-		const unsigned int 	m_h,				// number of refinements in space
-		const double		alpha,				// time integration parameter alpha
-		const unsigned int	method,				// time integration method (0 - variationally consistent, 1 - alpha family, 2 - modified alpha family)
-		const unsigned int	degree,				// degree of polynomial approximation of finite elements (1 - linear, 2 - quadratic, etc.)
-		const string 		result_file,		// if write_reference == true: file into which solution vector is stored, if write_reference == false: file containing solution vector to compare with
-		const bool			write_reference,	// whether to write reference solution or to compare with it
-		const bool			write_output = true)// whether to write output for each time step to files (may cause a large number files), if false, only the results at the ends of the loading steps are written
+int main()
 {
 
 /********************
  * parameters, etc. *
  ********************/
 
-	const unsigned int spacedim = 2;	// spatial dimensionality; this does only work for spacedim == 2
-
+	const unsigned int spacedim = 3;	// spatial dimensionality; this does only work for spacedim == 3
 
 	// quantities used for normalization (in SI units)
 	const double c_ast = 10000.0;
@@ -82,8 +117,9 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	const double L_ast = 1e-6;
 
 	// parameters (note: geometrical parameters must be consistent with mesh file, which is read in later)
-	const double L = 6e-6 / L_ast;							// width of domain
-	const double B = 1.5e-6 / L_ast;						// height of computational domain
+	const unsigned int N_ap = 5;			// number of active particles
+	const double L = N_ap * 6e-6 / L_ast;	// width of domain
+	const double B = 1.5e-6 / L_ast;		// height of computational domain
 
 	const double c_Li_ref = 47500.0 / c_ast;
 	const double c_Lip_ref = 750.0 / c_ast;
@@ -111,18 +147,24 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	const double T = 293.15 / T_ast;
 
 	// loading
-	const double t_1 = 600.0 * D_ast / (L_ast * L_ast);					// duration of loading steps
-	const double j_bar = -10e-12 / (F_ast * c_ast* L_ast * D_ast);		// constant current charging current
-	const double R_el = 4.0 * F_ast / (R_ast * T_ast) / fabs(j_bar);	// electrical resistance (determined such that current equals constant current charging current in magnitude if voltage is 4 V)
+	const double j_threshold_charging = 0.03;							// fraction of current magnitude at which constant voltage charging is stopped
+	const double j_threshold_discharging = 0.03;						// fraction of current magnitude at which discharging is stopped
+	const double j_bar = -24.7e-12 / (F_ast * c_ast* L_ast * D_ast);	// constant current charging current
+	const double phi_bar = 3.97 * F_ast / (R_ast * T_ast);				// cut-off voltage
+	const double R_el = fabs(phi_bar / j_bar);							// electrical resistance
 
 	// numerical parameters
 	const double eps_chemical = 1e-4;						// numerical parameter for regularization of chemical potential
-	const unsigned int N_refinements_sing_edge = 3;			// number of refinements at edge with stress singularity
-	const unsigned int N_refinements_global = m_h;			// number of global mesh refinements
-	const unsigned N_1 = 2.0 * pow(2.0, (double)m_t) + 0.5;	// nominal number of time steps per loading step
-	const unsigned int cell_divisions = degree;				// cell divisions for output
+	const unsigned int N_refinements_sing_edge = 0; //3;			// number of refinements at edge with stress singularity
+	const unsigned int N_refinements_global = 0;//1;			// number of global mesh refinements
 	const unsigned int solver_sym = 0;						// solver for method != 1: 0 - PARDISO, 1 - MA57, else - UMFPACK
 	const unsigned int solver_unsym = 0;					// solver for method == 1: 0 - PARDISO, else - UMFPACK
+	const unsigned int method = 2;							// numerical method (modified alpha-family)
+	const double alpha = 0.5;								// time integration parameter alpha
+	const unsigned int degree = 1;							// polynomial degree of finite elements
+	const unsigned int cell_divisions = 1;					// cell divisions for output
+	const double inc_0 = 10.0 * D_ast / (L_ast * L_ast);	// initial time increment (applied in constant current charging step and discharging step)
+	const double inc_max = 500.0 * D_ast / (L_ast * L_ast);	// maximum time increment
 
 	// mappings
 	MappingQGeneric<spacedim, spacedim> mapping_domain(degree);			// FE mapping on domain
@@ -133,7 +175,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 
 	// define some parameters for the problem solution
 	global_data.set_compute_sparsity_pattern(1);	// compute sparsity pattern only once and re-use for subsequent steps
-	global_data.set_max_iter(100);					// maximum number of Newton-Raphson iterations allowed
+	global_data.set_max_iter(20);					// maximum number of Newton-Raphson iterations allowed
 	global_data.set_max_cutbacks(1);				// maximum number of cutbacks allowed for line search
 	global_data.set_perform_line_search(false);		// do not perform line search
 	global_data.set_threshold_residual(1e-12);		// threshold for termination of Newton-Raphson iteration
@@ -147,36 +189,44 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	// the mesh already contains the assignment of the domain portions by material id's:
 	// 0 - solid electrolyte
 	// 1 - active particles
-	// attention: the region occupied by the mesh is -0.5 * L <= X <= 0.5 * L, 0 <= Y <= B (i.e., a different coordinate system is used then in the manuscript)
+	// attention: the region occupied by the mesh is 0 <= X <= B, 0 <= Y <= B, -0.5 * L <= Z <= 0.5 * L,  (i.e., the coordinate system is shifted along the Z axis compared to the manuscript)
 	Triangulation<spacedim> tria_domain;
 	GridIn<spacedim> grid_in;
-	ifstream input_file("tria_domain_2d.vtk");
+	ifstream input_file("tria_domain_3d.vtk");
 	grid_in.attach_triangulation(tria_domain);
 	grid_in.read_vtk(input_file);
 	input_file.close();
 
 	// triangulation system and interface definition
-	// 0 - Sigma_se,Li
-	// 2 - Sigma_se,Z=L
-	// 3 - Sigma_ap,Z=L
-	// 4 - Sigma_se,Y=0
-	// 5 - Sigma_ap,Y=0
-	// 6 - Sigma_se,Y=B
-	// 7 - Sigma_ap,Y=B
-	// 8 - Sigma_se,ap
+	// 0  - Sigma_se,X=0
+	// 1  - Sigma_ap,X=0
+	// 2  - Sigma_se,X=B
+	// 3  - Sigma_ap,X=B
+	// 4  - Sigma_se,Y=0
+	// 5  - Sigma_ap,Y=0
+	// 6  - Sigma_se,Y=B
+	// 7  - Sigma_ap,Y=B
+	// 8  - Sigma_se,Li
+	// 10 - Sigma_se_Z=L
+	// 11 - Sigma_ap_Z=L
+	// 12 - Sigma_se,ap
 	dealii::GalerkinTools::TriangulationSystem<spacedim> tria_system(tria_domain);
 
+	//define interfaces
 	for(const auto& cell : tria_domain.cell_iterators_on_level(0))
 	{
 		for(unsigned int face = 0; face < GeometryInfo<spacedim>::faces_per_cell; ++face)
 		{
 			if(cell->face(face)->at_boundary())
 			{
-				if(cell->face(face)->center()[0] < -L * 0.5 + 1e-12)
+				if(cell->face(face)->center()[0] < 1e-12)
 				{
-					tria_system.add_interface_cell(cell, face, 0);
+					if(cell->material_id() == 0)
+						tria_system.add_interface_cell(cell, face, 0);
+					else
+						tria_system.add_interface_cell(cell, face, 1);
 				}
-				else if(cell->face(face)->center()[0] > L * 0.5 - 1e-12)
+				else if(cell->face(face)->center()[0] > B - 1e-12)
 				{
 					if(cell->material_id() == 0)
 						tria_system.add_interface_cell(cell, face, 2);
@@ -197,39 +247,89 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 					else
 						tria_system.add_interface_cell(cell, face, 7);
 				}
+				else if(cell->face(face)->center()[2] < - 0.5 * L + 1e-12)
+				{
+					tria_system.add_interface_cell(cell, face, 8);
+				}
+				else if(cell->face(face)->center()[2] > 0.5 * L - 1e-12)
+				{
+					if(cell->material_id() == 0)
+						tria_system.add_interface_cell(cell, face, 10);
+					else
+						tria_system.add_interface_cell(cell, face, 11);
+				}
 			}
 			else
 			{
 				if( (cell->material_id() == 0) && (cell->neighbor(face)->material_id() == 1) )
-					tria_system.add_interface_cell(cell, face, 8);
+					tria_system.add_interface_cell(cell, face, 12);
 			}
 		}
 	}
 
 	// attach manifolds, so that curved interface of active particles is correctly represented upon mesh refinement
-	SphericalManifold<spacedim> spherical_manifold_domain = SphericalManifold<spacedim>(Point<spacedim>(B, 0.0));
-	SphericalManifold<spacedim-1, spacedim> spherical_manifold_interface = SphericalManifold<spacedim-1, spacedim>(Point<spacedim>(B, 0.0));
 	FlatManifold<spacedim> flat_manifold_domain;
 	FlatManifold<spacedim-1, spacedim> flat_manifold_interface;
-	tria_domain.set_manifold(1, spherical_manifold_domain);
+	Tensor<1,spacedim> direction_x, direction_y, direction_z;
+	direction_x[0] = direction_y[1] = direction_z[2] = 1.0;
+	CylindricalManifold<spacedim> cylindrical_manifold_z_domain(direction_z, Point<spacedim>());
+	CylindricalManifold<spacedim-1, spacedim> cylindrical_manifold_z_interface(direction_z, Point<spacedim>());
+	vector<SphericalManifold<spacedim>> spherical_manifold_domain;
+	vector<SphericalManifold<spacedim-1, spacedim>> spherical_manifold_interface;
+	vector<CylindricalManifold<spacedim>> cylindrical_manifold_x_domain, cylindrical_manifold_y_domain;
+	vector<CylindricalManifold<spacedim-1, spacedim>> cylindrical_manifold_x_interface, cylindrical_manifold_y_interface;
+	for(unsigned int n = 0; n < N_ap; ++n)
+	{
+		Point<spacedim> origin(0.0, 0.0, B + 2.0 * B * n);
+		spherical_manifold_domain.push_back(SphericalManifold<spacedim>(origin));
+		spherical_manifold_interface.push_back(SphericalManifold<spacedim-1, spacedim>(origin));
+		cylindrical_manifold_x_domain.push_back(CylindricalManifold<spacedim>(direction_x, origin));
+		cylindrical_manifold_y_domain.push_back(CylindricalManifold<spacedim>(direction_y, origin));
+		cylindrical_manifold_x_interface.push_back(CylindricalManifold<spacedim-1, spacedim>(direction_x, origin));
+		cylindrical_manifold_y_interface.push_back(CylindricalManifold<spacedim-1, spacedim>(direction_y, origin));
+		tria_domain.set_manifold(2 + 3 * n, spherical_manifold_domain.back());
+		tria_domain.set_manifold(3 + 3 * n, cylindrical_manifold_x_domain.back());
+		tria_domain.set_manifold(4 + 3 * n, cylindrical_manifold_y_domain.back());
+	}
 	tria_domain.set_manifold(0, flat_manifold_domain);
-	tria_system.set_interface_manifold(1, spherical_manifold_interface);
+	tria_domain.set_manifold(1, cylindrical_manifold_z_domain);
+	for(unsigned int n = 0; n < N_ap; ++n)
+	{
+		tria_system.set_interface_manifold(2 + 3 * n, spherical_manifold_interface[n]);
+		tria_system.set_interface_manifold(3 + 3 * n, cylindrical_manifold_x_interface[n]);
+		tria_system.set_interface_manifold(4 + 3 * n, cylindrical_manifold_y_interface[n]);
+	}
 	tria_system.set_interface_manifold(0, flat_manifold_interface);
+	tria_system.set_interface_manifold(1, cylindrical_manifold_z_interface);
 
 	// finish definition of geometry
 	tria_system.close();
 
 	// mesh refinement at singular edge
-	const Point<spacedim> p1(2.0 * B / 3.0, B);
-	const Point<spacedim> p2(4.0 * B / 3.0, B);
-	const Point<spacedim> p3(0.0, B / 3.0);
-	const Point<spacedim> p4(2.0 * B, B / 3.0);
+	vector<pair<Point<spacedim>, unsigned int>> center_points;
+	center_points.push_back(make_pair(Point<spacedim>(0.0, 0.0, 0.0), 2));
+	for(unsigned int n = 0; n < N_ap; ++n)
+	{
+		center_points.push_back(make_pair(Point<spacedim>(0.0, B, B + n * 2.0 * B), 1));
+		center_points.push_back(make_pair(Point<spacedim>(0.0, 0.0, 2.0 * B + n * 2.0 * B), 2));
+		center_points.push_back(make_pair(Point<spacedim>(B, 0.0, B + n * 2.0 * B), 0));
+	}
 	for(unsigned int refinement_step = 0; refinement_step < N_refinements_sing_edge; ++refinement_step)
 	{
 		for(const auto& cell : tria_domain.active_cell_iterators())
+		{
 			for(unsigned int v = 0; v < GeometryInfo<spacedim>::vertices_per_cell; ++v)
-				if( ( fabs(cell->vertex(v).distance(p1)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p2)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p3)) < 1e-12 ) || ( fabs(cell->vertex(v).distance(p4)) < 1e-12 ) )
-					cell->set_refine_flag();
+			{
+				for(const auto& center_point : center_points)
+				{
+					const unsigned int plane = center_point.second;
+					const double plane_coord = center_point.first[center_point.second];
+					const auto vertex = cell->vertex(v);
+					if( ( fabs(vertex.distance(center_point.first) - B / 3.0) < 1e-4 ) && ( fabs(vertex[plane] - plane_coord) < 1e-12 ) )
+						cell->set_refine_flag();
+				}
+			}
+		}
 		tria_domain.execute_coarsening_and_refinement();
 	}
 
@@ -240,6 +340,55 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	for(const auto& cell : tria_domain.active_cell_iterators())
 	{
 		for(unsigned int face = 0; face < GeometryInfo<spacedim>::faces_per_cell; ++face)
+		{
+			if(!cell->face(face)->at_boundary())
+			{
+				if(cell->face(face)->has_children())
+				{
+					// make sure that there are no "central" hanging nodes across the material interface, as the approach taken here won't move touch them (and this would lead to an
+					// inconsistency between domain and interface mesh)
+					Assert(cell->material_id() == cell->neighbor(face)->material_id(), ExcMessage("not allowed!"));
+					for(unsigned int line = 0; line  < GeometryInfo<spacedim>::lines_per_face; ++ line)
+					{
+						const Point<spacedim> vertex_pos = 0.5 * (cell->face(face)->line(line)->vertex(0) + cell->face(face)->line(line)->vertex(1));
+						const auto& child_0 = cell->face(face)->line(line)->child(0);
+						const auto& child_1 = cell->face(face)->line(line)->child(1);
+						if(child_0->vertex(0).distance(child_1->vertex(1)) < 1e-16)
+							child_0->vertex(0) = child_1->vertex(1) = vertex_pos;
+						else if(child_0->vertex(1).distance(child_1->vertex(0)) < 1e-16)
+							child_0->vertex(1) = child_1->vertex(0) = vertex_pos;
+						else if(child_0->vertex(1).distance(child_1->vertex(1)) < 1e-16)
+							child_0->vertex(1) = child_1->vertex(1) = vertex_pos;
+						else if(child_0->vertex(0).distance(child_1->vertex(0)) < 1e-16)
+							child_0->vertex(0) = child_1->vertex(0) = vertex_pos;
+					}
+					const Point<spacedim> vertex_pos = 0.25 * (cell->face(face)->vertex(0) + cell->face(face)->vertex(1) + cell->face(face)->vertex(2) + cell->face(face)->vertex(3));
+					for(unsigned int child_0_vertex = 0; child_0_vertex < GeometryInfo<spacedim>::vertices_per_face; ++child_0_vertex)
+					{
+						auto& vertex_0 = cell->face(face)->child(0)->vertex(child_0_vertex);
+						unsigned int coincident_vertices = 0;
+						for(unsigned int child_1 = 1; child_1 < GeometryInfo<spacedim>::max_children_per_face; ++child_1)
+						{
+							for(unsigned int child_1_vertex = 0; child_1_vertex < GeometryInfo<spacedim>::vertices_per_face; ++child_1_vertex)
+							{
+								const auto& vertex_1 = cell->face(face)->child(child_1)->vertex(child_1_vertex);
+								if(vertex_1.distance(vertex_0) < 1e-16)
+									++coincident_vertices;
+							}
+						}
+						if(coincident_vertices == 3)
+						{
+							vertex_0 = vertex_pos;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	for(const auto& cell : tria_system.get_triangulation_interface().active_cell_iterators())
+	{
+		for(unsigned int face = 0; face < GeometryInfo<spacedim-1>::faces_per_cell; ++face)
 		{
 			if(!cell->face(face)->at_boundary())
 			{
@@ -268,7 +417,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	ConstantFunction<spacedim> c_Li_initial(c_Li_ref);														// initial condition Lithium concentration in active particles
 	ConstantFunction<spacedim> c_LiX_initial(c_LiX_ref);													// initial condition salt concentration in solid electrolyte
 	ConstantFunction<spacedim> c_Lip_initial(c_Lip_ref);													// initial condition Lithium ion concentration in solid electrolyte
-	RampFunction<spacedim> current_ramp(j_bar);															// define ramp function for current ramp for first loading step
+	RampFunction<spacedim> current_ramp(j_bar);																// define ramp function for current ramp for first loading step
 
 	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});					// displacement field (region 0 is solid electrolyte, region 1 is active particle region)
 	IndependentField<spacedim, spacedim> c_Li("c_Li", FE_DGQ<spacedim>(degree), 1, {1}, &c_Li_initial);		// Lithium concentration in active particles
@@ -284,13 +433,17 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	IndependentField<0, spacedim> u_N("u_N");																// constant displacement for periodic b.c.
 
 	// define constraints for function spaces
-	DirichletConstraint<spacedim> dc_u_y_bottom(u, 1, InterfaceSide::minus, {4, 5});						// normal displacement constraint at bottom of domain
-	DirichletConstraint<spacedim> dc_u_y_top(u, 1, InterfaceSide::minus, {6, 7}, nullptr, &u_N);			// normal displacement constraint at top of domain
-	PointConstraint<spacedim, spacedim> dc_u_x(u, 0, Point<spacedim>(-0.5 * L, 0.0));						// lateral displacement constraint at single point
+	DirichletConstraint<spacedim> dc_u_x_bottom(u, 0, InterfaceSide::minus, {0, 1});						// normal displacement constraint on plane X=0
+	DirichletConstraint<spacedim> dc_u_x_top(u, 0, InterfaceSide::minus, {2, 3}, nullptr, &u_N);			// normal displacement constraint on plane X=B
+	DirichletConstraint<spacedim> dc_u_y_bottom(u, 1, InterfaceSide::minus, {4, 5});						// normal displacement constraint at plane Y=0
+	DirichletConstraint<spacedim> dc_u_y_top(u, 1, InterfaceSide::minus, {6, 7}, nullptr, &u_N);			// normal displacement constraint at plane Y=B
+	PointConstraint<spacedim, spacedim> dc_u_x(u, 2, Point<spacedim>(0.0, 0.0, -0.5 * L));					// lateral displacement constraint at single point
 	PointConstraint<0, spacedim> dc_J(J, 0, Point<spacedim>(), &current_ramp); 								// current ramp constraint for first loading step
 
 	// finally assemble the constraints into the constraints object
 	Constraints<spacedim> constraints;
+	constraints.add_dirichlet_constraint(dc_u_x_bottom);
+	constraints.add_dirichlet_constraint(dc_u_x_top);
 	constraints.add_dirichlet_constraint(dc_u_y_bottom);
 	constraints.add_dirichlet_constraint(dc_u_y_top);
 	constraints.add_point_constraint(dc_u_x);
@@ -312,13 +465,18 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	DependentField<spacedim, spacedim> F_yx("F_yx");
 	DependentField<spacedim, spacedim> F_zy("F_zy");
 	DependentField<spacedim, spacedim> F_xz("F_xz");
-	F_xx.add_term(1.0, u, 0, 0);
 	F_xx.add_term(1.0);
-	F_yy.add_term(1.0, u, 1, 1);
+	F_xx.add_term(1.0, u, 0, 0);
 	F_yy.add_term(1.0);
+	F_yy.add_term(1.0, u, 1, 1);
+	F_zz.add_term(1.0);
+	F_zz.add_term(1.0, u, 2, 2);
 	F_xy.add_term(1.0, u, 0, 1);
 	F_yx.add_term(1.0, u, 1, 0);
-	F_zz.add_term(1.0);
+	F_yz.add_term(1.0, u, 1, 2);
+	F_zy.add_term(1.0, u, 2, 1);
+	F_zx.add_term(1.0, u, 2, 0);
+	F_xz.add_term(1.0, u, 0, 2);
 
 	// X- concentration in solid electrolyte (determined by local electroneutrality)
 	DependentField<spacedim, spacedim> c_X_("c_X_");
@@ -368,6 +526,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	eta_Li_.add_term(1.0, eta_Li);
 	eta_Li_x.add_term(1.0, eta_Li, 0, 0);
 	eta_Li_y.add_term(1.0, eta_Li, 0, 1);
+	eta_Li_z.add_term(1.0, eta_Li, 0, 2);
 
 	// electrochemomechanical potential of Li+ ions in solid electrolyte and gradient thereof
 	DependentField<spacedim, spacedim> eta_Lip_("eta_Lip_");
@@ -377,6 +536,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	eta_Lip_.add_term(1.0, eta_Lip);
 	eta_Lip_x.add_term(1.0, eta_Lip, 0, 0);
 	eta_Lip_y.add_term(1.0, eta_Lip, 0, 1);
+	eta_Lip_z.add_term(1.0, eta_Lip, 0, 2);
 
 	// electrochemomechanical potential of X- ions in solid electrolyte and gradient thereof
 	DependentField<spacedim, spacedim> eta_X_("eta_X_");
@@ -386,6 +546,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	eta_X_.add_term(1.0, eta_X);
 	eta_X_x.add_term(1.0, eta_X, 0, 0);
 	eta_X_y.add_term(1.0, eta_X, 0, 1);
+	eta_X_z.add_term(1.0, eta_X, 0, 2);
 
 	// chemomechanical potential of LiX salt in solid electrolyte (computed from dissociation equilibrium)
 	DependentField<spacedim, spacedim> eta_LiX_("eta_LiX_");
@@ -546,7 +707,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 
 	// Omega on interface Sigma^se,Li - phi^se,Li
 	OmegaDualButlerVolmer00<spacedim> omega_se_Li(	{deta_se_Li},
-													{0},
+													{8},
 													QGauss<spacedim-1>(degree + 1),
 													global_data,
 													i_0_se_Li * R * T / F, beta_se_Li, R * T, 20.0,
@@ -556,7 +717,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 
 	// Omega on interface Sigma^se,ap - phi^se,ap
 	OmegaDualButlerVolmer00<spacedim> omega_se_ap(	{deta_se_ap},
-													{8},
+													{12},
 													QGauss<spacedim-1>(degree + 1),
 													global_data,
 													i_0_se_ap * R * T / F, beta_se_ap, R * T, 20.0,
@@ -590,8 +751,6 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 /***************************
  * Solution of the problem *
  ***************************/
-
-	bool error = false;
 
 	// define different solvers
 	BlockSolverWrapperPARDISO solver_wrapper_pardiso;
@@ -649,6 +808,10 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	// set up the finite element model
 	FEModel<spacedim, Vector<double>, BlockVector<double>, GalerkinTools::TwoBlockMatrix<SparseMatrix<double>>> fe_model(total_potential, tria_system, mapping_domain, mapping_interface, global_data, constraints, *solver_wrapper);
 
+	// postprocessor computing the determinant of the deformation gradient
+	PostprocessorJ<spacedim> pp_J("J", fe_model.get_assembly_helper().get_u_omega_global_component_index(u));
+	fe_model.attach_data_postprocessor_domain(pp_J);
+
 	// get the dof indices of phi and J (in order to be later able to read their values)
 	const unsigned int dof_index_phi_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&phi);
 	const unsigned int dof_index_j_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&J);
@@ -656,53 +819,67 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	// vector to store values (t, phi, J_dot)
 	vector<tuple<double, double, double>> phi_j;
 
-	// string for file names
-	const string variant_string = "_" + Utilities::to_string(alpha)
-								+ "_" + Utilities::to_string(method)
-								+ "_" + Utilities::to_string(degree);
-
-// first loading step (constant current loading)
-
+// first loading step
 	electrical_loading_tpc.loading_type = 0;
 	electrical_loading_tpc.j_bar = j_bar;
 
-	// quantities for linear extrapolation of potential to end of time step
-	double phi_old = 0.0;
-	double phi_pred = 0.0;
+	double inc = inc_0;
+	double pre_final_inc = inc_0;
 
-	double inc = t_1/(double)N_1;
-	double t = 0.0;
-	for(unsigned int step = 0; step < N_1; ++step)
+	for(;;)
 	{
-		cout << "time step " << step + 1 <<" of " << 3 * N_1 << endl;
-		t += inc;
+		// predict cutoff time by linear extrapolation
+		double cutoff_time = 1e16;
+		const unsigned int N_data_sets = phi_j.size();
+		if(N_data_sets > 1)
+		{
+			const double t_0__ = get<0>(phi_j[N_data_sets - 2]);
+			const double t_1__ = get<0>(phi_j[N_data_sets - 1]);
+			const double phi_0__ = get<1>(phi_j[N_data_sets - 2]);
+			const double phi_1__ = get<1>(phi_j[N_data_sets - 1]);
+			cutoff_time = ( ( ( phi_bar - phi_1__ ) * t_0__) - ( ( phi_bar - phi_0__ ) * t_1__) ) / ( phi_0__ - phi_1__ );
+		}
+		cout << "Cutoff time=" << cutoff_time << endl;
 
-		const int iter = fe_model.do_time_step(t);
+		double new_time = global_data.get_t() + inc;
+		if(new_time >= cutoff_time)
+		{
+			pre_final_inc = inc;
+			inc = cutoff_time - global_data.get_t();
+			new_time = cutoff_time;
+		}
+
+		cout << "Old time=" << global_data.get_t() << endl;
+		cout << "New time=" << new_time << endl;
+
+		const int iter = fe_model.do_time_step(new_time);
 		if(iter >= 0)
 		{
-			if(write_output)
-				fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
-			phi_pred = fe_model.get_solution_vector()(dof_index_phi_ap) + (1.0 - alpha) * (fe_model.get_solution_vector()(dof_index_phi_ap) - phi_old);
-			phi_old = fe_model.get_solution_vector()(dof_index_phi_ap);
-			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc));
+			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
+			phi_j.push_back(make_tuple(new_time - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc));
+
+			if(new_time == cutoff_time)
+				break;
+			if(iter < 4)
+			{
+				inc = inc * 2.0;
+				if(inc > inc_max)
+					inc = inc_max;
+			}
 		}
 		else
 		{
-			cout << "ERROR, Computation failed!" << endl;
-			error = true;
-			global_data.print_error_messages();
-			break;
+			cout << "ERROR, CUTBACK necessary!" << endl;
+			inc = inc / 2.0;
+			continue;
 		}
 		cout << endl;
 	}
-	if(!write_output)
-		fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
+	cout << "First step completed" << endl;
 
-
-// second loading step (constant voltage loading)
-
+// second step
 	electrical_loading_tpc.loading_type = 1;
-	electrical_loading_tpc.phi = phi_pred;
+	electrical_loading_tpc.phi = phi_bar;
 	dc_J.set_constraint_is_active(false);	// deactivate constraint for time-integrated current
 
 	// re-analyze sparsity pattern and matrix once as constraints have changed
@@ -711,33 +888,40 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	solver_wrapper_ma57.analyze = 1;
 	global_data.set_compute_sparsity_pattern(1);
 
-	for(unsigned int step = 0; step < N_1; ++step)
-	{
-		cout << "time step " << step + 1 + N_1 <<" of " << 3 * N_1 << endl;
-		t += inc;
+	// reset time increment size to the one used before the final increment in the constant current charging step
+	inc = pre_final_inc;
 
-		const int iter = fe_model.do_time_step(t);
+	for(;;)
+	{
+		double new_time = global_data.get_t() + inc;
+		cout << "Old time=" << global_data.get_t() << endl;
+		cout << "New time=" << new_time << endl;
+
+		const int iter = fe_model.do_time_step(new_time);
 		if(iter >= 0)
 		{
-			if(write_output)
-				fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
-			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc) );
+			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
+			phi_j.push_back(make_tuple( new_time - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc ) );
+			if( fabs( (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc ) <= fabs(j_threshold_charging * j_bar) )
+				break;
+			if(iter < 4)
+			{
+				inc = inc * 2.0;
+				if(inc > inc_max)
+					inc = inc_max;
+			}
 		}
 		else
 		{
-			cout << "ERROR, Computation failed!" << endl;
-			error = true;
-			global_data.print_error_messages();
-			break;
+			cout << "ERROR, CUTBACK necessary!" << endl;
+			inc = inc / 2.0;
+			continue;
 		}
 		cout << endl;
 	}
-	if(!write_output)
-		fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
+	cout << "Second step completed" << endl;
 
-
-// third loading step (discharge through electrical resistance)
-
+// third loading step
 	electrical_loading_tpc.loading_type = 2;
 	electrical_loading_tpc.R_el = R_el;
 	dc_J.set_constraint_is_active(true);	// formally activate the constraint for time-integrated current again - the value to which it is constrained here is immaterial (the constraint is only needed to make the linear systems definite).
@@ -748,122 +932,48 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 	solver_wrapper_ma57.analyze = 1;
 	global_data.set_compute_sparsity_pattern(1);
 
-	for(unsigned int step = 0; step < N_1; ++step)
-	{
-		cout << "time step " << step + 1 + N_1 + N_1 <<" of " << 3 * N_1 << endl;
-		t += inc;
+	// reset time increment size to the initial one
+	inc = inc_0;
 
-		const int iter = fe_model.do_time_step(t);
+	for(;;)
+	{
+		double new_time = global_data.get_t() + inc;
+		cout << "Old time=" << global_data.get_t() << endl;
+		cout << "New time=" << new_time << endl;
+
+		const int iter = fe_model.do_time_step(new_time);
 		if(iter >= 0)
 		{
-			if(write_output)
-				fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
-			phi_j.push_back(make_tuple(t - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), -fe_model.get_solution_vector()(dof_index_phi_ap)/electrical_loading_tpc.R_el));
+			fe_model.write_output_independent_fields("results/domain", "results/interface", cell_divisions);
+			phi_j.push_back(make_tuple(new_time - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), -fe_model.get_solution_vector()(dof_index_phi_ap)/R_el));
+			if( fabs(fe_model.get_solution_vector()(dof_index_phi_ap)/R_el) <= fabs(j_threshold_discharging * j_bar) )
+				break;
+			if(iter < 4)
+			{
+				inc = inc * 2.0;
+				if(inc > inc_max)
+					inc = inc_max;
+			}
 		}
 		else
 		{
-			cout << "ERROR, Computation failed!" << endl;
-			error = true;
-			global_data.print_error_messages();
-			break;
+			cout << "ERROR, CUTBACK necessary!" << endl;
+			inc = inc / 2.0;
+			continue;
 		}
 		cout << endl;
 	}
-	if(!write_output)
-		fe_model.write_output_independent_fields("results/output_files/domain" + variant_string + "_n" + Utilities::to_string(m_t), "results/output_files/interface" + variant_string + "_n" + Utilities::to_string(m_t), cell_divisions);
 	global_data.print_error_messages();
 
-	// write only reference solution
-	if(write_reference)
+	if(tria_system.get_this_proc_n_procs().first == 0)
 	{
-		fe_model.write_solution_to_file(result_file);
-		return vector<double>();
-	}
-	// compare with reference solution
-	else
-	{
-
-		double d_linfty = 1e16;
-		double d_l2 = 1e16;
-		if(!error)
+		FILE* printout = fopen ("results/independent_scalars.dat", "w");
+		for(const auto& phi_el : phi_j)
 		{
-			FEModel<spacedim, Vector<double>, BlockVector<double>, GalerkinTools::TwoBlockMatrix<SparseMatrix<double>>> fe_model_reference(total_potential, tria_system, mapping_domain, mapping_interface, global_data, constraints, *solver_wrapper);
-			fe_model_reference.read_solution_from_file(result_file);
-
-			ComponentMask cm_domain(DoFTools::n_components(fe_model.get_assembly_helper().get_dof_handler_system().get_dof_handler_domain()), false);
-
-			for(unsigned int i = 0; i < spacedim; ++i)
-				cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(u)+i, false);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Li), true);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_LiX), true);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Lip), true);
-			const double d_linfty_val = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::Linfty_norm, cm_domain, ComponentMask(), 0.0).first;
-			const double d_l2_val = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::L2_norm, cm_domain, ComponentMask(), 0.0).first;
-
-			for(unsigned int i = 0; i < spacedim; ++i)
-				cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(u)+i, true);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Li), false);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_LiX), false);
-			cm_domain.set(fe_model_reference.get_assembly_helper().get_u_omega_global_component_index(c_Lip), false);
-			const double d_linfty_grad = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::W1infty_seminorm, cm_domain, ComponentMask(), 0.0).first;
-			const double d_l2_grad = fe_model_reference.compute_distance_to_other_solution(fe_model, QGauss<spacedim>(degree+1), QGauss<spacedim-1>(degree+1), VectorTools::NormType::H1_seminorm, cm_domain, ComponentMask(), 0.0).first;
-
-			d_linfty = std::max(d_linfty_val, d_linfty_grad);
-			d_l2 = sqrt(d_l2_val * d_l2_val + d_l2_grad * d_l2_grad);
+			fprintf(printout, "%- 1.16e %- 1.16e %- 1.16e\n", get<0>(phi_el), get<1>(phi_el), get<2>(phi_el));
+			printf("%- 10.2f %- 10.2f %- 10.2f\n", get<0>(phi_el), get<1>(phi_el), get<2>(phi_el));
 		}
-
-		return {t_1 / (double)N_1, d_linfty, d_l2};
-	}
-
-}
-
-int main()
-{
-	const unsigned int m_t_max = 11;	// maximum number of refinements in time for convergence study
-//	const unsigned int m_h_max = 3;		// maximum number of refinements in space for convergence study
-
-//	const unsigned int m_t = 3;			// number of refinements in time to be used for convergence study in space
-	const unsigned int m_h = 1;			// number of refinements in space to be used for convergence study in time
-
-	// time integration methods to be studied
-	vector<pair<double, unsigned int>> methods_t;
-	methods_t.push_back(make_pair(0.5, 1));
-	methods_t.push_back(make_pair(1.0, 0));
-	methods_t.push_back(make_pair(0.5, 2));
-
-	// polynomial degrees of finite elements to be studied
-	vector<unsigned int> degrees;
-	degrees.push_back(1);
-	degrees.push_back(2);
-
-	// convergence study in time
-	for(const auto degree : degrees)
-	{
-		for(const auto method : methods_t)
-		{
-			const string variant_string = "_" + Utilities::to_string(method.first)
-										+ "_" + Utilities::to_string(method.second)
-										+ "_" + Utilities::to_string(degree);
-
-			const string file_name_res	= "results/results" + variant_string + ".dat";				// file where results are stored
-			const string file_name_ref	= "results/results" + variant_string + "_ref.dat";			// file where results are stored
-
-			// generate reference solution
-			solve(m_t_max, m_h, method.first, method.second, degree, file_name_ref, true, false);
-
-			// clear file
-			FILE* printout = fopen(file_name_res.c_str(),"w");
-			fclose(printout);
-
-			// compare
-			for(unsigned int m = 0; m < m_t_max; ++m)
-			{
-				const auto result_data = solve(m, m_h, method.first, method.second, degree, file_name_ref, false, false);
-				FILE* printout_ = fopen(file_name_res.c_str(),"a");
-				fprintf(printout_, "%- 1.16e %- 1.16e %- 1.16e\n", result_data[0], result_data[1], result_data[2]);
-				fclose(printout_);
-			}
-		}
+		fclose(printout);
 	}
 
 }
