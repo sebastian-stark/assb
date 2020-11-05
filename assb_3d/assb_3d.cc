@@ -149,7 +149,7 @@ int main()
 	// loading
 	const double j_threshold_charging = 0.03;							// fraction of current magnitude at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.03;						// fraction of current magnitude at which discharging is stopped
-	const double j_bar = -24.7e-12 / (F_ast * c_ast* L_ast * D_ast);	// constant current charging current
+	const double j_bar = -5e-12 / (F_ast * c_ast * L_ast * D_ast);	// constant current charging current
 	const double phi_bar = 3.97 * F_ast / (R_ast * T_ast);				// cut-off voltage
 	const double R_el = fabs(phi_bar / j_bar);							// electrical resistance
 
@@ -178,7 +178,6 @@ int main()
 	global_data.set_max_iter(20);					// maximum number of Newton-Raphson iterations allowed
 	global_data.set_max_cutbacks(1);				// maximum number of cutbacks allowed for line search
 	global_data.set_perform_line_search(false);		// do not perform line search
-	global_data.set_threshold_residual(1e-12);		// threshold for termination of Newton-Raphson iteration
 	global_data.set_scale_residual(false);			// do not scale the residual according to the matrix diagonals
 
 /*****************************************************
@@ -860,7 +859,7 @@ int main()
 
 			if(new_time == cutoff_time)
 				break;
-			if(iter < 4)
+			if(iter < 5)
 			{
 				inc = inc * 2.0;
 				if(inc > inc_max)
@@ -904,7 +903,7 @@ int main()
 			phi_j.push_back(make_tuple( new_time - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc ) );
 			if( fabs( (fe_model.get_solution_vector()(dof_index_j_ap) - fe_model.get_solution_ref_vector()(dof_index_j_ap))/inc ) <= fabs(j_threshold_charging * j_bar) )
 				break;
-			if(iter < 4)
+			if(iter < 5)
 			{
 				inc = inc * 2.0;
 				if(inc > inc_max)
@@ -948,7 +947,7 @@ int main()
 			phi_j.push_back(make_tuple(new_time - inc * (1.0 - alpha), fe_model.get_solution_vector()(dof_index_phi_ap), -fe_model.get_solution_vector()(dof_index_phi_ap)/R_el));
 			if( fabs(fe_model.get_solution_vector()(dof_index_phi_ap)/R_el) <= fabs(j_threshold_discharging * j_bar) )
 				break;
-			if(iter < 4)
+			if(iter < 5)
 			{
 				inc = inc * 2.0;
 				if(inc > inc_max)

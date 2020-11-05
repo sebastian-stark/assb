@@ -315,7 +315,7 @@ int main()
 
 	const unsigned int spacedim = 3;	// this currently doesn't work for anything else than spacedim == 2
 
-	const bool binary_se = false;		// if true, use relations for binary solid electrolyte
+	const bool binary_se = true;		// if true, use relations for binary solid electrolyte
 
 /**************
  * parameters *
@@ -335,7 +335,7 @@ int main()
 	const double B_ap = 1.5e-6 / L_ast;
 	const unsigned int N_ap = 5;
 
-	const double dt_1 = 1800.0 * D_ast / (L_ast * L_ast);
+	const double dt_1 = 9000.0 * D_ast / (L_ast * L_ast);
 	const double T = 293.15 / T_ast;
 
 	const double c_Li_ref = 47500.0 / c_ast;
@@ -366,8 +366,6 @@ int main()
 	const double V_s = N_ap * 1.0/3.0 * numbers::PI * R_ap * R_ap * R_ap;
 	const double V_kk = N_ap * 1.5 * numbers::PI / 3.0 * h_ap * h_ap * (3.0 * R_ap - h_ap);
 	const double j_ap_bar = -1.0/dt_1 * (V_s - V_kk) * (c_Li_ref - (c_V - 1.0 * 0.5 * c_V)) * F;
-	cout << j_ap_bar << endl;
-	return 0;
 	const double j_threshold_charging = 0.03;		// percentage of |j_ap_bar| at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.03;	// percentage of |j_ap_bar| at which discharging is stopped
 	const double phi_bar = eta_bar_Li - (R * T * log(0.5 * c_V / c_Li_ref) + dmu_ap * ( 0.5 - c_Li_ref / c_V ) ) / F;	// potential difference corresponding to 100 % charged state
@@ -375,15 +373,15 @@ int main()
 	// numerical parameters
 	const double eps_chemical = 1e-4;				// numerical parameter for regularization of chemical potential
 
-	const unsigned int n_refinements_global = 2;	// number of global refinements of cathode part of mesh (2)
-	const unsigned int n_refinements_sing_edge = 3;	// number of refinements at edge with stress singularity (3)
-	const unsigned int n_refinements_anode = 2;		// number of refinements at anode side (required only for binary solid electrolyte to capture inhomogeneous ion distribution) (3)
+	const unsigned int n_refinements_global = 0;//2;	// number of global refinements of cathode part of mesh (2)
+	const unsigned int n_refinements_sing_edge = 0;//;	// number of refinements at edge with stress singularity (3)
+	const unsigned int n_refinements_anode = 0;//2;		// number of refinements at anode side (required only for binary solid electrolyte to capture inhomogeneous ion distribution) (3)
 
 	const double alpha = 0.5;						// time integration parameter alpha
 	const unsigned int method = 2;					// time integration method (0: Miehe's method, 1: alpha family, 2: modified alpha family)
 	const double inc_0 = dt_1 / 1000.0;				// initial time increment
 	const double inc_max = dt_1 / 20.0;				// maximum time increment
-	const double resistance_factor = 0.01;			// scaling factor for resistance
+	const double resistance_factor = 1.0;			// scaling factor for resistance
 
 	const unsigned int degree = 1;					// degree of approximation of finite elements
 

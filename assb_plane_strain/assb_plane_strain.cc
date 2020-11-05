@@ -112,7 +112,7 @@ solve(	const unsigned int 	m_t,				// number of refinements in time
 
 	// loading
 	const double t_1 = 600.0 * D_ast / (L_ast * L_ast);					// duration of loading steps
-	const double j_bar = -10e-12 / (F_ast * c_ast* L_ast * D_ast);		// constant current charging current
+	const double j_bar = -10e-12 / (F_ast * c_ast * L_ast * D_ast);		// constant current charging current
 	const double R_el = 4.0 * F_ast / (R_ast * T_ast) / fabs(j_bar);	// electrical resistance (determined such that current equals constant current charging current in magnitude if voltage is 4 V)
 
 	// numerical parameters
