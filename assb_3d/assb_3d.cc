@@ -76,8 +76,7 @@ public:
 							vector<Vector<double>>&								computed_quantities)
 	const
 	{
-
-		double avg = 0.0;
+		//double avg = 0.0;
 		for(unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
 		{
 			Tensor<2, spacedim> F;
@@ -88,14 +87,108 @@ public:
 					F[m][n] += input_data.solution_gradients[dataset][global_component_index_u + m][n];
 			}
 			const double J = determinant(F);
-			avg += J;
+			computed_quantities[dataset][0] = J;
+			//avg += J;
 		}
-		avg *= 1.0/input_data.solution_gradients.size();
+		//avg *= 1.0/input_data.solution_gradients.size();
 
-		for(unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
-			computed_quantities[dataset][0] = avg;
+		//for(unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
+		//	computed_quantities[dataset][0] = avg;
 	}
 };
+
+// postprocessor computing the pressure from the displacement field
+template <int spacedim>
+class PressurePostprocessor : public DataPostprocessorScalar<spacedim>
+{
+private:
+
+	/**
+	 * Index of first component of displacement field
+	 */
+	const unsigned int
+	global_component_index_u;
+
+	/**
+	 * Indices of concentration fields for solid electrolyte and active particles
+	 */
+	const vector<vector<unsigned int>>
+	global_component_indices_c;
+
+	/**
+	 * Lame's constant \f$\lambda^\mathrm{se}\f$, \f$\lambda^\mathrm{ap}\f$
+	 */
+	const vector<double>
+	lambda;
+
+	/**
+	 * Lame's constant \f$\mu^\mathrm{se}\f$, \f$\mu^\mathrm{ap}\f$
+	 */
+	const vector<double>
+	mu;
+
+	/**
+	 * volume strain change \f$\Delta \varepsilon^\mathrm{LiX}\f$, \f$\Delta \varepsilon^\mathrm{Li}\f$
+	 */
+	const vector<double>
+	deps;
+
+	/**
+	 * reference concentrations \f$c^\mathrm{LiX,ref} + c^\mathrm{Li+,ref}\f$, \f$c^\mathrm{Li,ref}\f$
+	 */
+	const vector<double>
+	c_ref;
+
+public:
+	PressurePostprocessor(const string&						name,
+						const unsigned int					global_component_index_u,
+						const vector<vector<unsigned int>>	global_component_indices_c,
+						const vector<double>				lambda,
+						const vector<double>				mu,
+						const vector<double>				deps,
+						const vector<double>				c_ref)
+	:
+	DataPostprocessorScalar<spacedim>(name, update_values | update_gradients),
+	global_component_index_u(global_component_index_u),
+	global_component_indices_c(global_component_indices_c),
+	lambda(lambda),
+	mu(mu),
+	deps(deps),
+	c_ref(c_ref)
+	{
+	}
+
+	void
+	evaluate_vector_field(	const DataPostprocessorInputs::Vector<spacedim>&	input_data,
+							vector<Vector<double>>&								computed_quantities)
+	const override
+	{
+
+		const Tensor<2, 3> I = unit_symmetric_tensor<3,double>();
+		Tensor<2, 3> F, E, T;
+		const auto current_cell = input_data.template get_cell<hp::DoFHandler<spacedim>>();
+		const unsigned int material_id = current_cell->material_id();
+
+		for (unsigned int dataset = 0; dataset < input_data.solution_gradients.size(); ++dataset)
+		{
+
+			F = 0.0;
+			for (unsigned int d = 0; d < spacedim; ++d)
+				for (unsigned int e = 0; e < spacedim; ++e)
+					F[d][e] = input_data.solution_gradients[dataset][global_component_index_u + d][e];
+			for (unsigned int d = 0; d < 3; ++d)
+				F[d][d] += 1.0;
+
+			double c = 0.0;
+			for(const auto& global_component_index_c : global_component_indices_c[material_id])
+				c += input_data.solution_values[dataset][global_component_index_c];
+			E = 0.5 * (contract<0, 0>(F, F) - I) - deps[material_id]/3.0 * (c/c_ref[material_id] - 1.0) * I;
+			T = lambda[material_id] * trace(E) * I + 2.0 * mu[material_id] * E;
+			computed_quantities[dataset][0] = -trace(T)/3.0;
+		}
+	}
+ };
+
 
 
 // the main program
@@ -149,21 +242,21 @@ int main()
 	// loading
 	const double j_threshold_charging = 0.03;							// fraction of current magnitude at which constant voltage charging is stopped
 	const double j_threshold_discharging = 0.03;						// fraction of current magnitude at which discharging is stopped
-	const double j_bar = -5e-12 / (F_ast * c_ast * L_ast * D_ast);	// constant current charging current
-	const double phi_bar = 3.97 * F_ast / (R_ast * T_ast);				// cut-off voltage
+	const double j_bar = -5e-12 / (F_ast * c_ast * L_ast * D_ast);		// constant current charging current
+	const double phi_bar = 4.0 * F_ast / (R_ast * T_ast);				// cut-off voltage
 	const double R_el = fabs(phi_bar / j_bar);							// electrical resistance
 
 	// numerical parameters
 	const double eps_chemical = 1e-4;						// numerical parameter for regularization of chemical potential
-	const unsigned int N_refinements_sing_edge = 0; //3;			// number of refinements at edge with stress singularity
-	const unsigned int N_refinements_global = 0;//1;			// number of global mesh refinements
+	const unsigned int N_refinements_sing_edge = 2;			// number of refinements at edge with stress singularity
+	const unsigned int N_refinements_global = 1;			// number of global mesh refinements
 	const unsigned int solver_sym = 0;						// solver for method != 1: 0 - PARDISO, 1 - MA57, else - UMFPACK
 	const unsigned int solver_unsym = 0;					// solver for method == 1: 0 - PARDISO, else - UMFPACK
-	const unsigned int method = 2;							// numerical method (modified alpha-family)
+	const unsigned int method = 1;							// numerical method (modified alpha-family)
 	const double alpha = 0.5;								// time integration parameter alpha
-	const unsigned int degree = 1;							// polynomial degree of finite elements
-	const unsigned int cell_divisions = 1;					// cell divisions for output
-	const double inc_0 = 10.0 * D_ast / (L_ast * L_ast);	// initial time increment (applied in constant current charging step and discharging step)
+	const unsigned int degree = 2;							// polynomial degree of finite elements
+	const unsigned int cell_divisions = degree;				// cell divisions for output
+	const double inc_0 = 0.1 * D_ast / (L_ast * L_ast);		// initial time increment (applied in constant current charging step and discharging step)
 	const double inc_max = 500.0 * D_ast / (L_ast * L_ast);	// maximum time increment
 
 	// mappings
@@ -209,7 +302,9 @@ int main()
 	// 10 - Sigma_se_Z=L
 	// 11 - Sigma_ap_Z=L
 	// 12 - Sigma_se,ap
-	dealii::GalerkinTools::TriangulationSystem<spacedim> tria_system(tria_domain);
+	dealii::GalerkinTools::TriangulationSystem<spacedim> tria_system(tria_domain, true);		// use automatic vertex correction to make sure that domain and interface mesh remain consistent
+																								// (things would otherwise be slightly messed up since the transfinite interpolation manifold
+																								// apparently handles things differently on the boundary then in the volume)
 
 	//define interfaces
 	for(const auto& cell : tria_domain.cell_iterators_on_level(0))
@@ -290,8 +385,10 @@ int main()
 		tria_domain.set_manifold(3 + 3 * n, cylindrical_manifold_x_domain.back());
 		tria_domain.set_manifold(4 + 3 * n, cylindrical_manifold_y_domain.back());
 	}
+
 	tria_domain.set_manifold(0, flat_manifold_domain);
 	tria_domain.set_manifold(1, cylindrical_manifold_z_domain);
+
 	for(unsigned int n = 0; n < N_ap; ++n)
 	{
 		tria_system.set_interface_manifold(2 + 3 * n, spherical_manifold_interface[n]);
@@ -300,9 +397,14 @@ int main()
 	}
 	tria_system.set_interface_manifold(0, flat_manifold_interface);
 	tria_system.set_interface_manifold(1, cylindrical_manifold_z_interface);
+	// note: don't assign a transfinite interpolation manifold to the interface here and let the automatic vertex correction fix things
+	//       (this is only possible since the entire interface mesh which would require transfinite interpolation is in fact flat)
 
 	// finish definition of geometry
 	tria_system.close();
+
+	// global mesh refinement
+	tria_domain.refine_global(N_refinements_global);
 
 	// mesh refinement at singular edge
 	vector<pair<Point<spacedim>, unsigned int>> center_points;
@@ -332,90 +434,15 @@ int main()
 		tria_domain.execute_coarsening_and_refinement();
 	}
 
-	// global mesh refinement
-	tria_domain.refine_global(N_refinements_global);
-
-	// fix hanging node positions where manifold is not flat (mathematically probably not strictly necessary - but looks better and apparently works better in practice)
-	for(const auto& cell : tria_domain.active_cell_iterators())
-	{
-		for(unsigned int face = 0; face < GeometryInfo<spacedim>::faces_per_cell; ++face)
-		{
-			if(!cell->face(face)->at_boundary())
-			{
-				if(cell->face(face)->has_children())
-				{
-					// make sure that there are no "central" hanging nodes across the material interface, as the approach taken here won't move touch them (and this would lead to an
-					// inconsistency between domain and interface mesh)
-					Assert(cell->material_id() == cell->neighbor(face)->material_id(), ExcMessage("not allowed!"));
-					for(unsigned int line = 0; line  < GeometryInfo<spacedim>::lines_per_face; ++ line)
-					{
-						const Point<spacedim> vertex_pos = 0.5 * (cell->face(face)->line(line)->vertex(0) + cell->face(face)->line(line)->vertex(1));
-						const auto& child_0 = cell->face(face)->line(line)->child(0);
-						const auto& child_1 = cell->face(face)->line(line)->child(1);
-						if(child_0->vertex(0).distance(child_1->vertex(1)) < 1e-16)
-							child_0->vertex(0) = child_1->vertex(1) = vertex_pos;
-						else if(child_0->vertex(1).distance(child_1->vertex(0)) < 1e-16)
-							child_0->vertex(1) = child_1->vertex(0) = vertex_pos;
-						else if(child_0->vertex(1).distance(child_1->vertex(1)) < 1e-16)
-							child_0->vertex(1) = child_1->vertex(1) = vertex_pos;
-						else if(child_0->vertex(0).distance(child_1->vertex(0)) < 1e-16)
-							child_0->vertex(0) = child_1->vertex(0) = vertex_pos;
-					}
-					const Point<spacedim> vertex_pos = 0.25 * (cell->face(face)->vertex(0) + cell->face(face)->vertex(1) + cell->face(face)->vertex(2) + cell->face(face)->vertex(3));
-					for(unsigned int child_0_vertex = 0; child_0_vertex < GeometryInfo<spacedim>::vertices_per_face; ++child_0_vertex)
-					{
-						auto& vertex_0 = cell->face(face)->child(0)->vertex(child_0_vertex);
-						unsigned int coincident_vertices = 0;
-						for(unsigned int child_1 = 1; child_1 < GeometryInfo<spacedim>::max_children_per_face; ++child_1)
-						{
-							for(unsigned int child_1_vertex = 0; child_1_vertex < GeometryInfo<spacedim>::vertices_per_face; ++child_1_vertex)
-							{
-								const auto& vertex_1 = cell->face(face)->child(child_1)->vertex(child_1_vertex);
-								if(vertex_1.distance(vertex_0) < 1e-16)
-									++coincident_vertices;
-							}
-						}
-						if(coincident_vertices == 3)
-						{
-							vertex_0 = vertex_pos;
-							break;
-						}
-					}
-				}
-			}
-		}
-	}
-	for(const auto& cell : tria_system.get_triangulation_interface().active_cell_iterators())
-	{
-		for(unsigned int face = 0; face < GeometryInfo<spacedim-1>::faces_per_cell; ++face)
-		{
-			if(!cell->face(face)->at_boundary())
-			{
-				if(cell->face(face)->has_children())
-				{
-					const Point<spacedim> vertex_pos = 0.5 * (cell->face(face)->vertex(0) + cell->face(face)->vertex(1));
-					const auto& child_0 = cell->face(face)->child(0);
-					const auto& child_1 = cell->face(face)->child(1);
-					if(child_0->vertex(0).distance(child_1->vertex(1)) < 1e-16)
-						child_0->vertex(0) = child_1->vertex(1) = vertex_pos;
-					else if(child_0->vertex(1).distance(child_1->vertex(0)) < 1e-16)
-						child_0->vertex(1) = child_1->vertex(0) = vertex_pos;
-					else if(child_0->vertex(1).distance(child_1->vertex(1)) < 1e-16)
-						child_0->vertex(1) = child_1->vertex(1) = vertex_pos;
-					else if(child_0->vertex(0).distance(child_1->vertex(0)) < 1e-16)
-						child_0->vertex(0) = child_1->vertex(0) = vertex_pos;
-				}
-			}
-		}
-	}
+	tria_system.write_triangulations_vtk("tria_domain.vtk", "tria_interface.vtk");
 
 /**************************************
  * unknowns and Dirichlet constraints *
  **************************************/
 
-	ConstantFunction<spacedim> c_Li_initial(c_Li_ref);														// initial condition Lithium concentration in active particles
-	ConstantFunction<spacedim> c_LiX_initial(c_LiX_ref);													// initial condition salt concentration in solid electrolyte
-	ConstantFunction<spacedim> c_Lip_initial(c_Lip_ref);													// initial condition Lithium ion concentration in solid electrolyte
+	dealii::Functions::ConstantFunction<spacedim> c_Li_initial(c_Li_ref);									// initial condition Lithium concentration in active particles
+	dealii::Functions::ConstantFunction<spacedim> c_LiX_initial(c_LiX_ref);									// initial condition salt concentration in solid electrolyte
+	dealii::Functions::ConstantFunction<spacedim> c_Lip_initial(c_Lip_ref);									// initial condition Lithium ion concentration in solid electrolyte
 	RampFunction<spacedim> current_ramp(j_bar);																// define ramp function for current ramp for first loading step
 
 	IndependentField<spacedim, spacedim> u("u", FE_Q<spacedim>(degree), spacedim, {0,1});					// displacement field (region 0 is solid electrolyte, region 1 is active particle region)
@@ -547,7 +574,7 @@ int main()
 	eta_X_y.add_term(1.0, eta_X, 0, 1);
 	eta_X_z.add_term(1.0, eta_X, 0, 2);
 
-	// chemomechanical potential of LiX salt in solid electrolyte (computed from dissociation equilibrium)
+	// chemomechanical potential of LiX salt in solid electrolyte (computed from dissociation equilibrium, introduced for simpler implementation)
 	DependentField<spacedim, spacedim> eta_LiX_("eta_LiX_");
 	eta_LiX_.add_term(1.0, eta_Lip);
 	eta_LiX_.add_term(1.0, eta_X);
@@ -806,10 +833,26 @@ int main()
 
 	// set up the finite element model
 	FEModel<spacedim, Vector<double>, BlockVector<double>, GalerkinTools::TwoBlockMatrix<SparseMatrix<double>>> fe_model(total_potential, tria_system, mapping_domain, mapping_interface, global_data, constraints, *solver_wrapper);
+	cout << "Number of active cells in mesh: " << tria_domain.n_active_cells() << endl;
+	cout << "Number of unknowns: " << fe_model.get_assembly_helper().get_dof_handler_system().n_dofs() << endl << endl;
 
 	// postprocessor computing the determinant of the deformation gradient
 	PostprocessorJ<spacedim> pp_J("J", fe_model.get_assembly_helper().get_u_omega_global_component_index(u));
 	fe_model.attach_data_postprocessor_domain(pp_J);
+
+	// postprocessor computing the pressures
+	vector<vector<unsigned int>> component_indices_c(2);
+	component_indices_c[0].push_back(fe_model.get_assembly_helper().get_u_omega_global_component_index(c_Lip));
+	component_indices_c[0].push_back(fe_model.get_assembly_helper().get_u_omega_global_component_index(c_LiX));
+	component_indices_c[1].push_back(fe_model.get_assembly_helper().get_u_omega_global_component_index(c_Li));
+	PressurePostprocessor<spacedim> postproc_P(	"P",
+												fe_model.get_assembly_helper().get_u_omega_global_component_index(u),
+												component_indices_c,
+												{lambda_se, lambda_ap},
+												{mu_se, mu_ap},
+												{deps_LiX, deps_Li},
+												{c_Lip_ref + c_LiX_ref, c_Li_ref});
+	fe_model.attach_data_postprocessor_domain(postproc_P);
 
 	// get the dof indices of phi and J (in order to be later able to read their values)
 	const unsigned int dof_index_phi_ap = fe_model.get_assembly_helper().get_global_dof_index_C(&phi);
@@ -930,6 +973,7 @@ int main()
 	solver_wrapper_umfpack.analyze = 1;
 	solver_wrapper_ma57.analyze = 1;
 	global_data.set_compute_sparsity_pattern(1);
+	global_data.set_max_iter(8);			// maximum number of Newton-Raphson iterations allowed (reduce in order to properly resolve final breakdown of electrical current)
 
 	// reset time increment size to the initial one
 	inc = inc_0;

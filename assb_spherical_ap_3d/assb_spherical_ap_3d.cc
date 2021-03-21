@@ -374,7 +374,7 @@ int main()
 	const double eps_chemical = 1e-4;				// numerical parameter for regularization of chemical potential
 
 	const unsigned int n_refinements_global = 0;//2;	// number of global refinements of cathode part of mesh (2)
-	const unsigned int n_refinements_sing_edge = 0;//;	// number of refinements at edge with stress singularity (3)
+	const unsigned int n_refinements_sing_edge = 0;//3;	// number of refinements at edge with stress singularity (3)
 	const unsigned int n_refinements_anode = 0;//2;		// number of refinements at anode side (required only for binary solid electrolyte to capture inhomogeneous ion distribution) (3)
 
 	const double alpha = 0.5;						// time integration parameter alpha
@@ -565,7 +565,6 @@ int main()
 	}
 	tria_domain.set_manifold(0, flat_manifold_domain);
 	tria_domain.set_manifold(1, cylindrical_manifold_z_domain);
-
 
 	// mesh refinement
 

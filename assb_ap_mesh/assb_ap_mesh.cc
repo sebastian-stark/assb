@@ -180,7 +180,7 @@ void get_mesh_parts_3d(Triangulation<3>& tria_ap, Triangulation<3>& tria_se_0, T
 	const vector<unsigned int> repetitions_z = {1, 1, 2};
 	GridGenerator::subdivided_hyper_rectangle(tria_parts.back(), repetitions_z, Point<spacedim>(-0.5, -0.5, 0.0), Point<spacedim>(0.0, 0.0, 1.0));
 
-//m erge the parts together to form one eighth of the active particle surrounded by solid electrolyte
+//merge the parts together to form one eighth of the active particle surrounded by solid electrolyte
 	Triangulation<spacedim> tria_1(Triangulation<spacedim>::MeshSmoothing::none, true);
 	GridGenerator::merge_triangulations({&tria_parts[0], &tria_parts[1], &tria_parts[2], &tria_parts[3], &tria_parts[4], &tria_parts[5], &tria_parts[6]}, tria_1);
 
@@ -192,20 +192,6 @@ void get_mesh_parts_3d(Triangulation<3>& tria_ap, Triangulation<3>& tria_se_0, T
 	GridTools::shift(shift_vector, tria_1);
 
 // make some further adjustments to vertex positions in order to make the shape of the active particle spherical
-	const double new_pos_3 = 0.5/sqrt(2.0);
-	for(auto& cell : tria_1.active_cell_iterators())
-	{
-		for(unsigned int v = 0; v < GeometryInfo<spacedim>::vertices_per_cell; ++v)
-		{
-			auto& p = cell->vertex(v);
-			if( ( fabs(p[0] - 0.5) < 1e-8) && ( fabs(p[1] - 0.5) < 1e-8) && ( fabs(p[2] - 1.5) < 1e-8) )
-				p[0] = p[1] = new_pos_3;
-			else if( ( fabs(p[0] - 0.5) < 1e-8) && ( fabs(p[1] - 1.5) < 1e-8) && ( fabs(p[2] - 0.5) < 1e-8) )
-				p[0] = p[2] = new_pos_3;
-			else if( ( fabs(p[0] - 1.5) < 1e-8) && ( fabs(p[1] - 0.5) < 1e-8) && ( fabs(p[2] - 0.5) < 1e-8) )
-				p[1] = p[2] = new_pos_3;
-		}
-	}
 
 	const double new_pos_4 = sqrt(5.0)/2.0;
 	for(auto& cell : tria_1.active_cell_iterators())
@@ -229,11 +215,73 @@ void get_mesh_parts_3d(Triangulation<3>& tria_ap, Triangulation<3>& tria_se_0, T
 	}
 
 // now make a copy of the octant, rotate and merge in order to get one quarter of the active particle
-	Triangulation<spacedim> tria_2;
+	Triangulation<spacedim> tria_2, tria_3, tria_4, tria_5;
+
+	set< typename Triangulation<spacedim>::active_cell_iterator > cells_to_remove;
+	for(const auto& cell : tria_1.active_cell_iterators())
+	{
+		if( ( cell->center().distance(Point<spacedim>(1.5 - 1.5 / 6.0, 1.5 / 6.0, 1.5 / 6.0)) < 1e-8 ) )
+			cells_to_remove.insert(cell);
+		if( ( cell->center().distance(Point<spacedim>(1.5 / 6.0, 1.5 - 1.5 / 6.0, 1.5 / 6.0)) < 1e-8 ) )
+			cells_to_remove.insert(cell);
+		if( ( cell->center().distance(Point<spacedim>(1.5 / 6.0, 1.5 / 6.0, 1.5 - 1.5 / 6.0)) < 1e-8 ) )
+			cells_to_remove.insert(cell);
+	}
+	GridGenerator::create_triangulation_with_removed_cells(tria_1, cells_to_remove, tria_2);
+
+	// make some further adjustments to vertex positions in order to make the shape of the active particle spherical
+	const double new_pos_3 = 0.5/sqrt(2.0);
+	for(auto& cell : tria_2.active_cell_iterators())
+	{
+		for(unsigned int v = 0; v < GeometryInfo<spacedim>::vertices_per_cell; ++v)
+		{
+			auto& p = cell->vertex(v);
+			if( ( fabs(p[0] - 0.5) < 1e-8) && ( fabs(p[1] - 0.5) < 1e-8) && ( fabs(p[2] - 1.5) < 1e-8) )
+				p[0] = p[1] = new_pos_3;
+			else if( ( fabs(p[0] - 0.5) < 1e-8) && ( fabs(p[1] - 1.5) < 1e-8) && ( fabs(p[2] - 0.5) < 1e-8) )
+				p[0] = p[2] = new_pos_3;
+			else if( ( fabs(p[0] - 1.5) < 1e-8) && ( fabs(p[1] - 0.5) < 1e-8) && ( fabs(p[2] - 0.5) < 1e-8) )
+				p[1] = p[2] = new_pos_3;
+		}
+	}
+
+	GridGenerator::quarter_hyper_ball(tria_3, Point<spacedim>(), 0.5);
+	tria_3.set_all_manifold_ids(0);
+	for(const auto& cell : tria_3.active_cell_iterators())
+	{
+		for(unsigned int v = 0; v < GeometryInfo<spacedim>::vertices_per_cell; ++v)
+		{
+			if( (fabs(cell->vertex(v)[2] - 0.0) < 1e-8) && (fabs(cell->vertex(v)[0] - 0.5 / sqrt(2.0)) < 1e-8) && (fabs(cell->vertex(v)[1] - 0.5 / sqrt(2.0)) < 1e-8) )
+				cell->vertex(v)[0] = cell->vertex(v)[1] = 0.5;
+			if( (fabs(cell->vertex(v)[0] - 0.0) < 1e-8) && (fabs(cell->vertex(v)[1] - 0.5 / sqrt(2.0)) < 1e-8) && (fabs(cell->vertex(v)[2] - 0.5 / sqrt(2.0)) < 1e-8) )
+				cell->vertex(v)[1] = cell->vertex(v)[2] = 0.5;
+			if( (fabs(cell->vertex(v)[0] - 0.5 / sqrt(3.0)) < 1e-8) && (fabs(cell->vertex(v)[1] - 0.5 / sqrt(3.0)) < 1e-8) && (fabs(cell->vertex(v)[2] - 0.5 / sqrt(3.0)) < 1e-8) )
+				cell->vertex(v)[0] = cell->vertex(v)[1] = cell->vertex(v)[2] = 0.5;
+		}
+	}
+
+	GridTools::rotate(numbers::PI, 0, tria_3);
+	GridTools::rotate(-0.5 * numbers::PI, 1, tria_3);
+	Tensor<1,spacedim> shift;
+	shift[1] = 1.5;
+	GridTools::shift(shift, tria_3);
+
+	tria_4.copy_triangulation(tria_3);
+	GridTools::rotate(-0.5 * numbers::PI, 0, tria_4);
+	GridTools::rotate(-0.5 * numbers::PI, 1, tria_4);
+
+	tria_5.copy_triangulation(tria_3);
+	GridTools::rotate(0.5 * numbers::PI, 0, tria_5);
+	GridTools::rotate(0.5 * numbers::PI, 2, tria_5);
+
+	tria_1.clear();
+	GridGenerator::merge_triangulations({&tria_2, &tria_3, &tria_4, &tria_5}, tria_1, 1e-12);
+
+	tria_2.clear();
 	tria_2.copy_triangulation(tria_1);
 	GridTools::rotate(1.5*numbers::PI, 0, tria_2);
 
-	GridGenerator::merge_triangulations({&tria_1, &tria_2}, tria_ap, 1e-12, true);
+	GridGenerator::merge_triangulations({&tria_1, &tria_2}, tria_ap, 1e-12);
 
 	// shift triangulation to origin
 	shift_vector[0] = 0.0;
@@ -336,95 +384,89 @@ void get_mesh_parts_3d(Triangulation<3>& tria_ap, Triangulation<3>& tria_se_0, T
 
 }
 
-void attach_material_ids_manifold_ids_ap_3d(Triangulation<3>& tria_ap, const unsigned int n)
+void attach_material_ids_manifold_ids_3d(Triangulation<3>& tria_domain_3d, const unsigned int N_ap)
 {
 	const unsigned int spacedim = 3;
 
-	const double z_offset = 1.5 + 3.0 * n;
+	tria_domain_3d.set_all_manifold_ids(4 + 3 * (N_ap - 1) + 1);
 
-	// shift such that active particle is centered at origin
-	Tensor<1,spacedim> shift_vector;
-	shift_vector[0] = 0.0;
-	shift_vector[1] = 0.0;
-	shift_vector[2] = -z_offset;
-	GridTools::shift(shift_vector, tria_ap);
-
-	// material id's
-	Point<spacedim> origin;
-	const double r = sqrt(10)/2.0;
-	for(const auto& cell : tria_ap.active_cell_iterators())
+	for(unsigned int n = 0; n < N_ap; ++n)
 	{
-		if(cell->center().distance(origin) < r)
-			cell->set_material_id(1);
-		else
-			cell->set_material_id(0);
-	}
+		const double z_offset = 1.5 + 3.0 * n;
 
-	// start with setting all manifolds of the active particle to a spherical manifold
-	tria_ap.set_all_manifold_ids(0);
-	for(const auto& cell : tria_ap.active_cell_iterators())
-		if(cell->material_id() == 1)
-			cell->set_all_manifold_ids(2 + n*3);
+		// shift such that active particle is centered at origin
+		Tensor<1,spacedim> shift_vector;
+		shift_vector[0] = 0.0;
+		shift_vector[1] = 0.0;
+		shift_vector[2] = -z_offset;
+		GridTools::shift(shift_vector, tria_domain_3d);
 
-	// set manifold id's of some inner parts of active particle to cylindrical manifold
-	for(const auto& cell : tria_ap.active_cell_iterators())
-	{
-		if(cell->material_id() == 1)
+		// material id's
+		Point<spacedim> origin;
+		const double r = sqrt(10)/2.0;
+		for(const auto& cell : tria_domain_3d.active_cell_iterators())
 		{
-			for(unsigned int f = 0; f < GeometryInfo<spacedim>::faces_per_cell; ++f)
+			if(cell->material_id() != 1)
 			{
-				if( (cell->face(f)->center()[0] < 1e-8) && (cell->face(f)->center().distance(origin) > 1.0/sqrt(2.0) ) && ( fabs( cell->face(f)->center()[1] - fabs(cell->face(f)->center()[2]) ) < 1e-8 ) )
-					cell->set_all_manifold_ids(3+n*3);
-
-				if( (cell->face(f)->center()[1] < 1e-8) && (cell->face(f)->center().distance(origin) > 1.0/sqrt(2.0) ) && ( fabs( cell->face(f)->center()[0] - fabs(cell->face(f)->center()[2]) ) < 1e-8 ) )
-					cell->set_all_manifold_ids(4+n*3);
-
-				if( (fabs(cell->face(f)->center()[2]) < 1e-8) && (cell->face(f)->center().distance(origin) > 1.0/sqrt(2.0) ) && ( fabs( cell->face(f)->center()[0] - cell->face(f)->center()[1] ) < 1e-8 ) )
-					cell->set_all_manifold_ids(1);
+				if(cell->center().distance(origin) < r)
+				{
+					cell->set_material_id(1);
+				}
+				else
+				{
+					cell->set_material_id(0);
+				}
 			}
 		}
-	}
 
-	// set manifold id's of some inner parts of active particles to flat manifold
-	for(const auto& cell : tria_ap.active_cell_iterators())
-	{
-		if(cell->material_id() == 1)
+		// spherical manifold id's
+		for(const auto& cell : tria_domain_3d.active_cell_iterators())
 		{
-			const auto& center = cell->center();
-			if( ( (center[0] < 0.5) && (center[1] < 0.5) ) || ( (center[0] < 0.5) && (fabs(center[2]) < 0.5) ) || ( (center[1] < 0.5) && (fabs(center[2]) < 0.5) ) )
-				cell->set_all_manifold_ids(0);
-		}
-	}
-
-	// set manifold id's of cutting surface of active particle to cylindrical manifold
-	for(const auto& cell : tria_ap.active_cell_iterators())
-	{
-		if(cell->material_id() == 1)
-		{
-			for(unsigned int f = 0; f < GeometryInfo<spacedim>::faces_per_cell; ++f)
+			if(fabs(cell->center()[2]) < 1.5)
 			{
-				if(cell->face(f)->center()[0] > 1.5 - 1e-8)
-					for(unsigned int l = 0; l < GeometryInfo<spacedim>::lines_per_face; ++l)
-						if( ( cell->face(f)->line(l)->center()[1] > 0.26 - 1e-8) || ( fabs(cell->face(f)->line(l)->center()[2]) > 0.26 - 1e-8) )
-							cell->face(f)->line(l)->set_manifold_id(3+n*3);
-
-				if(cell->face(f)->center()[1] > 1.5 - 1e-8)
-					for(unsigned int l = 0; l < GeometryInfo<spacedim>::lines_per_face; ++l)
-						if( ( cell->face(f)->line(l)->center()[0] > 0.26 - 1e-8) || ( fabs(cell->face(f)->line(l)->center()[2]) > 0.26 - 1e-8) )
-							cell->face(f)->line(l)->set_manifold_id(4+n*3);
-
-				if(fabs(cell->face(f)->center()[2]) > 1.5 - 1e-8)
-					for(unsigned int l = 0; l < GeometryInfo<spacedim>::lines_per_face; ++l)
-						if( ( cell->face(f)->line(l)->center()[0] > 0.26 - 1e-8) || ( cell->face(f)->line(l)->center()[1] > 0.26 - 1e-8) )
-							cell->face(f)->line(l)->set_manifold_id(1);
+				for(unsigned int f = 0; f < GeometryInfo<spacedim>::faces_per_cell; ++f)
+				{
+					if(!cell->face(f)->at_boundary())
+					{
+						if( (cell->material_id() == 0) && (cell->neighbor(f)->material_id() == 1))
+						{
+							if( (fabs(cell->face(f)->center()[0] - 1.5) > 1e-8) && (fabs(cell->face(f)->center()[1] - 1.5) > 1e-8) && (fabs(cell->face(f)->center()[2] - 1.5) > 1e-8) && (fabs(cell->face(f)->center()[2] + 1.5) > 1e-8) )
+							{
+								cell->face(f)->set_all_manifold_ids(2 + 3 * n);
+							}
+						}
+					}
+				}
 			}
 		}
+
+		// cylindrical manifold id's
+		for(const auto& cell : tria_domain_3d.active_cell_iterators())
+		{
+			if(fabs(cell->center()[2]) < 1.5)
+			{
+				if(cell->material_id() == 1)
+				{
+					for(unsigned int f = 0; f < GeometryInfo<spacedim>::faces_per_cell; ++f)
+					{
+						for(unsigned int l = 0; l < GeometryInfo<spacedim>::lines_per_face; ++l)
+						{
+							if( (fabs( fabs(cell->face(f)->line(l)->center()[0]) - 1.5) < 1e-8) && (sqrt(cell->face(f)->line(l)->center()[1] * cell->face(f)->line(l)->center()[1] + cell->face(f)->line(l)->center()[2] * cell->face(f)->line(l)->center()[2]) >= 0.45) )
+								cell->face(f)->line(l)->set_all_manifold_ids(3 + n * 3);
+							else if( (fabs( fabs(cell->face(f)->line(l)->center()[1]) - 1.5) < 1e-8) && (sqrt(cell->face(f)->line(l)->center()[0] * cell->face(f)->line(l)->center()[0] + cell->face(f)->line(l)->center()[2] * cell->face(f)->line(l)->center()[2]) >= 0.45) )
+								cell->face(f)->line(l)->set_all_manifold_ids(4 + n * 3);
+							else if( (fabs( fabs(cell->face(f)->line(l)->center()[2]) - 1.5) < 1e-8) && (sqrt(cell->face(f)->line(l)->center()[0] * cell->face(f)->line(l)->center()[0] + cell->face(f)->line(l)->center()[1] * cell->face(f)->line(l)->center()[1]) >= 0.45) )
+								cell->face(f)->line(l)->set_all_manifold_ids(1);
+						}
+					}
+				}
+			}
+		}
+
+		// shift active particle back to original position
+		shift_vector[2] = z_offset;
+		GridTools::shift(shift_vector, tria_domain_3d);
 	}
-
-	// shift active particle back to original position
-	shift_vector[2] = z_offset;
-	GridTools::shift(shift_vector, tria_ap);
-
 }
 
 void attach_material_ids_manifold_ids_se_0_3d(Triangulation<3>& tria_se_0)
@@ -473,17 +515,11 @@ double make_mesh_3d(const unsigned int 	N_ap,
 		shift_vector[1] = 0.0;
 		shift_vector[2] = 3.0 * n;
 		GridTools::shift(shift_vector, tria_parts.back());
-
-		// assign manifold id's
-		attach_material_ids_manifold_ids_ap_3d(tria_parts.back(), n);
-
 	}
 
 	// solid electrolyte transition layer
 	tria_parts.push_back(Triangulation<spacedim>());
 	tria_parts.back().copy_triangulation(tria_se_0);
-	// assign manifold id's
-	attach_material_ids_manifold_ids_se_0_3d(tria_parts.back());
 
 	// solid electrolyte extra layers
 	for(unsigned int n = 1; n < N_se; ++n)
@@ -498,14 +534,14 @@ double make_mesh_3d(const unsigned int 	N_ap,
 		shift_vector[1] = 0.0;
 		shift_vector[2] = -0.5 * (n - 1);
 		GridTools::shift(shift_vector, tria_parts.back());
-
-		//assign manifold id's
-		tria_parts.back().set_all_manifold_ids(0);
 	}
 
 	// now merge everything
 	for(const auto& tria_part : tria_parts)
 		GridGenerator::merge_triangulations(tria_part, tria_domain_3d, tria_domain_3d, 1e-12, true);
+
+	//attach materials and manifolds
+	attach_material_ids_manifold_ids_3d(tria_domain_3d, N_ap);
 
 	// now warp and scale to get the right dimensions
 	const double L_se_old = N_se * 0.5;
@@ -522,18 +558,45 @@ double make_mesh_3d(const unsigned int 	N_ap,
 int main()
 {
 // 2d or 3d mesh
-	const unsigned int mesh_dimension = 3;
+	const unsigned int mesh_dimension = 2;
 
 // make 3d mesh, which is used for extraction of 2d mesh
-	const unsigned int N_ap = 5;
-	const unsigned int N_se = 20;
-	const double L_ap = 15.0;
-	const double L_se = 15.0;
+	const unsigned int N_ap = 1;
+	const unsigned int N_se = 4 * N_ap;
+	const double L_ap = 3.0 * N_ap;
+	const double L_se = 3.0 * N_ap;
 	Triangulation<3>	tria_domain_3d;
 	const double scale_factor = make_mesh_3d(N_ap, N_se, L_ap, L_se, tria_domain_3d);
 
 	if(mesh_dimension == 3)
 	{
+/*
+		// manifolds
+		FlatManifold<3> flat_manifold_domain;
+		Tensor<1,3> direction_x, direction_y, direction_z;
+		direction_x[0] = direction_y[1] = direction_z[2] = 1.0;
+		CylindricalManifold<3> cylindrical_manifold_z_domain(direction_z, Point<3>());
+		vector<SphericalManifold<3>> spherical_manifold_domain;
+		vector<CylindricalManifold<3>> cylindrical_manifold_x_domain, cylindrical_manifold_y_domain;
+		for(unsigned int n = 0; n < N_ap; ++n)
+		{
+			Point<3> origin(0.0, 0.0, 1.5 + 3.0 * n);
+			spherical_manifold_domain.push_back(SphericalManifold<3>(origin));
+			cylindrical_manifold_x_domain.push_back(CylindricalManifold<3>(direction_x, origin));
+			cylindrical_manifold_y_domain.push_back(CylindricalManifold<3>(direction_y, origin));
+			tria_domain_3d.set_manifold(2 + 3 * n, spherical_manifold_domain.back());
+			tria_domain_3d.set_manifold(3 + 3 * n, cylindrical_manifold_x_domain.back());
+			tria_domain_3d.set_manifold(4 + 3 * n, cylindrical_manifold_y_domain.back());
+		}
+		tria_domain_3d.set_manifold(0, flat_manifold_domain);
+		tria_domain_3d.set_manifold(1, cylindrical_manifold_z_domain);
+
+		TransfiniteInterpolationManifold<3> transfinite_interpolation_manifold;
+		transfinite_interpolation_manifold.initialize(tria_domain_3d);
+		tria_domain_3d.set_manifold(4 + 3 * (N_ap - 1) + 1, transfinite_interpolation_manifold);
+		tria_domain_3d.refine_global(2);
+*/
+
 		ofstream output_file("tria_domain_3d.vtk");
 		GridOut grid_out;
 		grid_out.write_vtk(tria_domain_3d, output_file);
